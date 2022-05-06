@@ -1,7 +1,7 @@
 mod config;
 mod parse;
 
-pub use crate::config::{BackendConfiguration, Configuration};
+pub use crate::config::Configuration;
 use crate::parse::{parse_tags, Event, Tag};
 use fastly::http::body::StreamingBody;
 use fastly::http::header;
@@ -13,6 +13,7 @@ use std::io::Write;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ExecutionError {
     #[error("xml parsing error: {0}")]
     XMLError(#[from] quick_xml::Error),
@@ -44,7 +45,12 @@ impl Processor {
 }
 
 impl Processor {
-    pub fn execute_esi(&self, original_request: Request, mut document: Response) -> Result<()> {
+    pub fn execute_esi(
+        &self,
+        original_request: Request,
+        mut document: Response,
+        request_handler: &dyn Fn(Request) -> Result<Response>,
+    ) -> Result<()> {
         // Create a parser for the ESI document
         let body = document.take_body();
         let xml_reader = Reader::from_reader(body);
@@ -56,7 +62,12 @@ impl Processor {
         let mut xml_writer = Writer::new(output);
 
         // Parse the ESI document
-        match self.execute_esi_fragment(original_request, xml_reader, &mut xml_writer) {
+        match self.execute_esi_fragment(
+            original_request,
+            xml_reader,
+            &mut xml_writer,
+            request_handler,
+        ) {
             Ok(_) => Ok(()),
             Err(err) => {
                 error!("error executing ESI: {:?}", err);
@@ -75,6 +86,7 @@ impl Processor {
         original_request: Request,
         mut xml_reader: Reader<Body>,
         xml_writer: &mut Writer<StreamingBody>,
+        request_handler: &dyn Fn(Request) -> Result<Response>,
     ) -> Result<()> {
         // Parse the ESI fragment
         parse_tags(
@@ -87,13 +99,21 @@ impl Processor {
                         alt,
                         continue_on_error,
                     }) => {
-                        let resp = match self.send_esi_fragment_request(&original_request, &src) {
+                        let resp = match self.send_esi_fragment_request(
+                            &original_request,
+                            &src,
+                            request_handler,
+                        ) {
                             Ok(resp) => Some(resp),
                             Err(err) => {
                                 warn!("Request to {} failed: {:?}", src, err);
                                 if let Some(alt) = alt {
                                     warn!("Trying `alt` instead: {}", alt);
-                                    match self.send_esi_fragment_request(&original_request, &alt) {
+                                    match self.send_esi_fragment_request(
+                                        &original_request,
+                                        &alt,
+                                        request_handler,
+                                    ) {
                                         Ok(resp) => Some(resp),
                                         Err(err) => {
                                             debug!("Alt request to {} failed: {:?}", alt, err);
@@ -121,6 +141,7 @@ impl Processor {
                                 original_request.clone_without_body(),
                                 reader,
                                 xml_writer,
+                                request_handler,
                             )?;
                         } else {
                             error!("No content for fragment");
@@ -138,7 +159,12 @@ impl Processor {
         Ok(())
     }
 
-    fn send_esi_fragment_request(&self, original_request: &Request, url: &str) -> Result<Response> {
+    fn send_esi_fragment_request(
+        &self,
+        original_request: &Request,
+        url: &str,
+        request_handler: &dyn Fn(Request) -> Result<Response>,
+    ) -> Result<Response> {
         let mut req = original_request
             .clone_without_body()
             .with_url(url)
@@ -146,27 +172,11 @@ impl Processor {
 
         let hostname = req.get_url().host().expect("no host").to_string();
 
-        let backend_config = self.configuration.backends.get(&hostname);
-
-        let backend_name = backend_config
-            .and_then(|c| c.name.to_owned())
-            .unwrap_or_else(|| hostname.clone());
-
         req.set_header(header::HOST, &hostname);
 
-        if let Some(config) = backend_config {
-            if let Some(ttl) = config.ttl {
-                req.set_ttl(ttl);
-            }
-            req.set_pass(config.pass);
-        }
+        debug!("Requesting ESI fragment: {}", url);
 
-        debug!(
-            "Sending ESI fragment request `{}` to backend `{}`",
-            url, backend_name
-        );
-
-        let resp = req.send(backend_name)?;
+        let resp = request_handler(req)?;
         if resp.get_status().is_success() {
             Ok(resp)
         } else {

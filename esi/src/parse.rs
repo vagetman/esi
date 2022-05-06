@@ -15,6 +15,7 @@ pub enum Tag {
 }
 
 #[derive(Debug)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Event<'e> {
     XML(quick_xml::events::Event<'e>),
     ESI(Tag),

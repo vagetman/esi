@@ -1,4 +1,4 @@
-use esi::{BackendConfiguration, Processor};
+use esi::Processor;
 use fastly::{http::StatusCode, mime, Error, Request, Response};
 
 fn main() {
@@ -24,19 +24,13 @@ fn handle_request(req: Request) -> Result<(), Error> {
     // Generate synthetic test response from "index.html" file.
     let beresp = Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
 
-    let config = esi::Configuration::default()
-        .with_backend_override("httpbin.org", "127.0.0.1")
-        .with_backend(
-            "esi-test.edgecompute.app",
-            BackendConfiguration {
-                ttl: Some(120),
-                ..Default::default()
-            },
-        );
+    let config = esi::Configuration::default();
 
     let processor = Processor::new(config);
 
-    processor.execute_esi(req, beresp)?;
+    processor.execute_esi(req, beresp, &|req| {
+        Ok(req.with_ttl(120).send("esi-test.edgecompute.app")?)
+    })?;
 
     Ok(())
 }
