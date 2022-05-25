@@ -53,7 +53,8 @@ impl Processor {
     ) -> Result<()> {
         // Create a parser for the ESI document
         let body = document.take_body();
-        let xml_reader = Reader::from_reader(body);
+        let mut xml_reader = Reader::from_reader(body);
+        xml_reader.check_end_names(false);
 
         // Send the response headers to the client and open an output stream
         let output = document.stream_to_client();
@@ -136,7 +137,8 @@ impl Processor {
                         };
 
                         if let Some(mut resp) = resp {
-                            let reader = Reader::from_reader(resp.take_body());
+                            let mut reader = Reader::from_reader(resp.take_body());
+                            xml_reader.check_end_names(false);
                             self.execute_esi_fragment(
                                 original_request.clone_without_body(),
                                 reader,
