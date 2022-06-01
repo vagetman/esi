@@ -107,7 +107,7 @@ impl Processor {
         // Set up an XML writer to write directly to the client output stream.
         let mut xml_writer = Writer::new(output);
 
-        // Parse the ESI document
+        // Parse the ESI document and stream it to the XML writer.
         match self.execute_esi_fragment(
             original_request,
             xml_reader,
@@ -186,13 +186,19 @@ impl Processor {
                         };
 
                         if let Some(mut resp) = resp {
-                            let fragment_xml_reader = reader_from_body(resp.take_body());
-                            self.execute_esi_fragment(
-                                original_request.clone_without_body(),
-                                fragment_xml_reader,
-                                xml_writer,
-                                request_handler,
-                            )?;
+                            if self.configuration.recursive {
+                                let fragment_xml_reader = reader_from_body(resp.take_body());
+                                self.execute_esi_fragment(
+                                    original_request.clone_without_body(),
+                                    fragment_xml_reader,
+                                    xml_writer,
+                                    request_handler,
+                                )?;
+                            } else if let Err(err) =
+                                xml_writer.inner().write_all(&resp.take_body().into_bytes())
+                            {
+                                error!("Failed to write fragment body: {}", err);
+                            }
                         } else {
                             error!("No content for fragment");
                         }

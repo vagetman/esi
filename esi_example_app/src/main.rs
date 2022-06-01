@@ -24,7 +24,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
     // Generate synthetic test response from "index.html" file.
     let beresp = Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
 
-    let config = esi::Configuration::default();
+    let config = esi::Configuration::default().with_recursion();
 
     let processor = Processor::new(config);
 
