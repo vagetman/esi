@@ -1,3 +1,44 @@
+//! # ESI for Fastly
+//!
+//! This crate provides a streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
+//!
+//! The implementation is currently a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), so
+//! only the `esi:include` tag is supported. Other tags will be ignored.
+//!
+//! ## Usage Example
+//!
+//! ```rust,no_run
+//! use esi::Processor;
+//! use fastly::{http::StatusCode, mime, Error, Request, Response};
+//!
+//! fn main() {
+//!     if let Err(err) = handle_request(Request::from_client()) {
+//!         println!("returning error response");
+//!
+//!         Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
+//!             .with_body(err.to_string())
+//!             .send_to_client();
+//!     }
+//! }
+//!
+//! fn handle_request(req: Request) -> Result<(), Error> {
+//!     // Fetch ESI document from backend.
+//!     let beresp = req.send("origin_0")?;
+//!
+//!     // Construct an ESI processor with the default configuration.
+//!     let config = esi::Configuration::default();
+//!     let processor = Processor::new(config);
+//!
+//!     // Execute the ESI document using the client request as context
+//!     // and sending all requests to the backend `origin_1`.
+//!     processor.execute_esi(req, beresp, &|req| {
+//!         Ok(req.with_ttl(120).send("origin_1")?)
+//!     })?;
+//!
+//!     Ok(())
+//! }
+//! ```
+
 mod config;
 mod parse;
 
@@ -33,18 +74,23 @@ pub enum ExecutionError {
 
 pub type Result<T> = std::result::Result<T, ExecutionError>;
 
+/// An instance of the ESI processor with a given configuration.
 #[derive(Default)]
 pub struct Processor {
     configuration: Configuration,
 }
 
 impl Processor {
+    /// Construct a new ESI processor with the given configuration.
     pub fn new(configuration: Configuration) -> Self {
         Self { configuration }
     }
 }
 
 impl Processor {
+    /// Execute the ESI document (`document`) using the provided client request (`original_request`) as context.
+    ///
+    /// The `request_handler` parameter is a closure that is called for each ESI fragment request.
     pub fn execute_esi(
         &self,
         original_request: Request,
@@ -81,6 +127,10 @@ impl Processor {
         }
     }
 
+    /// Execute the ESI fragment (`fragment`) using the provided client request (`original_request`) as context.
+    ///
+    /// Rather than sending the result of the execution to the client, this function will write XML tags directly
+    /// to the given `xml_writer`, allowing for nesting.
     pub fn execute_esi_fragment(
         &self,
         original_request: Request,

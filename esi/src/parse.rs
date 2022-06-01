@@ -21,6 +21,7 @@ pub enum Event<'e> {
     ESI(Tag),
 }
 
+/// Parses the ESI document from the given `reader` and calls the `callback` closure upon each successfully parsed ESI tag.
 pub fn parse_tags<'a, R>(
     namespace: &str,
     reader: &mut Reader<R>,

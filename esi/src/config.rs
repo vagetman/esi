@@ -1,5 +1,7 @@
+/// This struct is used to configure optional behaviour within the ESI processor.
 #[derive(Clone, Debug)]
 pub struct Configuration {
+    /// The XML namespace to use when scanning for ESI tags. Defaults to `esi`.
     pub namespace: String,
 }
 
