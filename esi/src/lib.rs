@@ -40,39 +40,18 @@
 //! ```
 
 mod config;
+mod error;
 mod parse;
 
 pub use crate::config::Configuration;
 use crate::parse::{parse_tags, Event, Tag};
+pub use error::{ExecutionError, Result};
 use fastly::http::body::StreamingBody;
 use fastly::http::header;
-use fastly::http::request::SendError;
 use fastly::{Body, Request, Response};
 use log::{debug, error, warn};
 use quick_xml::{Reader, Writer};
 use std::io::Write;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum ExecutionError {
-    #[error("xml parsing error: {0}")]
-    XMLError(#[from] quick_xml::Error),
-    #[error("tag `{0}` is missing required parameter `{1}`")]
-    MissingRequiredParameter(String, String),
-    #[error("unexpected `{0}` closing tag")]
-    UnexpectedClosingTag(String),
-    #[error("duplicate attribute detected: {0}")]
-    DuplicateTagAttribute(String),
-    #[error("error sending request: {0}")]
-    RequestError(#[from] SendError),
-    #[error("received unexpected status code for fragment: {0}")]
-    UnexpectedStatus(u16),
-    #[error("unknown error")]
-    Unknown,
-}
-
-pub type Result<T> = std::result::Result<T, ExecutionError>;
 
 /// An instance of the ESI processor with a given configuration.
 #[derive(Default)]
