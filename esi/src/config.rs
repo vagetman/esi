@@ -1,10 +1,19 @@
 /// This struct is used to configure optional behaviour within the ESI processor.
+///
+/// ## Usage Example
+/// ```rust,no_run
+/// let config = esi::Configuration::default()
+///     .with_namespace("app")
+///     .with_recursion();
+///
+/// let processor = esi::Processor::new(config);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Configuration {
     /// The XML namespace to use when scanning for ESI tags. Defaults to `esi`.
     pub namespace: String,
 
-    // Whether or not to execute nested ESI tags within fetched fragments. Defaults to `false`.
+    /// Whether or not to execute nested ESI tags within fetched fragments. Defaults to `false`.
     pub recursive: bool,
 }
 

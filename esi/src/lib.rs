@@ -43,15 +43,18 @@ mod config;
 mod error;
 mod parse;
 
-pub use crate::config::Configuration;
-use crate::parse::{parse_tags, Event, Tag};
-pub use error::{ExecutionError, Result};
 use fastly::http::body::StreamingBody;
 use fastly::http::header;
 use fastly::{Body, Request, Response};
 use log::{debug, error, warn};
 use quick_xml::{Reader, Writer};
 use std::io::Write;
+
+use crate::error::Result;
+use crate::parse::{parse_tags, Event, Tag};
+
+pub use crate::config::Configuration;
+pub use crate::error::ExecutionError;
 
 /// An instance of the ESI processor with a given configuration.
 #[derive(Default)]
@@ -67,7 +70,8 @@ impl Processor {
 }
 
 impl Processor {
-    /// Execute the ESI document (`document`) using the provided client request (`original_request`) as context.
+    /// Execute the ESI document (`document`) using the provided client request (`original_request`) as context,
+    /// and stream the resulting output to the client.
     ///
     /// The `request_handler` parameter is a closure that is called for each ESI fragment request.
     pub fn execute_esi(

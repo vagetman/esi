@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use fastly::http::request::SendError;
 
+/// Describes an error encountered during ESI parsing or execution.
 #[derive(Error, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum ExecutionError {
