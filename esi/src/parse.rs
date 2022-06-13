@@ -85,7 +85,10 @@ where
                 continue
             }
 
-            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(quick_xml::events::Event::Eof) => {
+                debug!("End of document");
+                break
+            },
             Ok(e) => callback(Event::XML(e.into_owned()))?,
             _ => {}
         }

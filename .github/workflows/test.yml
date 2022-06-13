@@ -19,3 +19,6 @@ jobs:
       - name: Check source
         run: cargo check
         shell: bash
+      - name: Run tests
+        run: cargo test
+        shell: bash

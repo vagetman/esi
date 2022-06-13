@@ -23,7 +23,7 @@
 //!
 //! fn handle_request(req: Request) -> Result<(), Error> {
 //!     // Fetch ESI document from backend.
-//!     let beresp = req.send("origin_0")?;
+//!     let beresp = req.clone_without_body().send("origin_0")?;
 //!
 //!     // Construct an ESI processor with the default configuration.
 //!     let config = esi::Configuration::default();
@@ -51,7 +51,7 @@ use quick_xml::{Reader, Writer};
 use std::io::Write;
 
 use crate::error::Result;
-use crate::parse::{parse_tags, Event, Tag};
+pub use crate::parse::{parse_tags, Event, Tag};
 
 pub use crate::config::Configuration;
 pub use crate::error::ExecutionError;
