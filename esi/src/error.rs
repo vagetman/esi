@@ -18,10 +18,6 @@ pub enum ExecutionError {
     #[error("unexpected `{0}` closing tag")]
     UnexpectedClosingTag(String),
 
-    /// The ESI document contains a tag with an attribute that appears more than once.
-    #[error("duplicate attribute detected: {0}")]
-    DuplicateTagAttribute(String),
-
     /// An error occurred when sending a fragment request to a backend.
     #[error("error sending request: {0}")]
     RequestError(#[from] SendError),

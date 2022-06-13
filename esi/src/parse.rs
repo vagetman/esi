@@ -14,6 +14,7 @@ pub enum Tag {
     },
 }
 
+/// Representation of either XML data or a parsed ESI tag.
 #[derive(Debug)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Event<'e> {

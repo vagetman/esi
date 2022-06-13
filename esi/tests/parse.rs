@@ -90,3 +90,19 @@ fn parse_open_include() -> Result<(), ExecutionError> {
 
     Ok(())
 }
+
+#[test]
+fn parse_invalid_include() -> Result<(), ExecutionError> {
+    setup();
+
+    let input = "<esi:include/>";
+
+    let res = parse_tags("esi", &mut Reader::from_str(input), &mut |_| Ok(()));
+
+    assert!(matches!(
+        res,
+        Err(ExecutionError::MissingRequiredParameter(_, _))
+    ));
+
+    Ok(())
+}
