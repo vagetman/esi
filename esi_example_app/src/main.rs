@@ -22,15 +22,27 @@ fn handle_request(req: Request) -> Result<(), Error> {
     }
 
     // Generate synthetic test response from "index.html" file.
+    // You probably want replace this with a backend call, e.g. `req.clone_without_body().send("origin_0")`
     let beresp = Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
 
-    let config = esi::Configuration::default().with_recursion();
+    // If the response is HTML, we can parse it for ESI tags.
+    if beresp
+        .get_content_type()
+        .map(|c| c.subtype() == mime::HTML)
+        .unwrap_or(false)
+    {
+        let config = esi::Configuration::default().with_recursion();
 
-    let processor = Processor::new(config);
+        let processor = Processor::new(config);
 
-    processor.execute_esi(req, beresp, &|req| {
-        Ok(req.with_ttl(120).send("esi-test.edgecompute.app")?)
-    })?;
+        processor.execute_esi(req, beresp, &|req| {
+            Ok(req.with_ttl(120).send("esi-test.edgecompute.app")?)
+        })?;
 
-    Ok(())
+        Ok(())
+    } else {
+        // Otherwise, we can just return the response.
+        beresp.send_to_client();
+        Ok(())
+    }
 }

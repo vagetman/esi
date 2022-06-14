@@ -204,10 +204,13 @@ impl Processor {
         url: &str,
         request_handler: &dyn Fn(Request) -> Result<Response>,
     ) -> Result<Response> {
-        let mut req = original_request
-            .clone_without_body()
-            .with_url(url)
-            .with_pass(true);
+        let mut req = original_request.clone_without_body().with_pass(true);
+
+        if url.starts_with('/') {
+            req.get_url_mut().set_path(url);
+        } else {
+            req.set_url(url);
+        }
 
         let hostname = req.get_url().host().expect("no host").to_string();
 

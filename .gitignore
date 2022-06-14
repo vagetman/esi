@@ -3,3 +3,4 @@ pkg/
 bin/
 Cargo.lock
 .idea/
+demo/
