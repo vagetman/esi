@@ -204,7 +204,7 @@ impl Processor {
         url: &str,
         request_handler: &dyn Fn(Request) -> Result<Response>,
     ) -> Result<Response> {
-        let mut req = original_request.clone_without_body().with_pass(true);
+        let mut req = original_request.clone_without_body();
 
         if url.starts_with('/') {
             req.get_url_mut().set_path(url);
