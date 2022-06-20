@@ -35,9 +35,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
 
         let processor = Processor::new(config);
 
-        processor.execute_esi(req, beresp, &|req| {
-            Ok(req.with_ttl(120).send("esi-test.edgecompute.app")?)
-        })?;
+        processor.execute_esi(req, beresp, &|req| Ok(req.with_ttl(120).send("mock-s3")?))?;
 
         Ok(())
     } else {

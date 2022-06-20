@@ -1,5 +1,5 @@
 use crate::{ExecutionError, Result};
-use log::debug;
+use log::{debug, warn};
 use quick_xml::events::BytesStart;
 use quick_xml::Reader;
 use std::io::BufRead;
@@ -111,18 +111,28 @@ fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
         }
     };
 
-    let alt = attributes
-        .find(|attr| attr.key == b"alt")
-        .map(|attr| String::from_utf8(attr.value.to_vec()).unwrap());
+    let mut alt = None;
+    let mut continue_on_error = false;
 
-    let continue_on_error = attributes
-        .find(|attr| attr.key == b"onerror")
-        .map(|attr| &attr.value.to_vec() == b"continue")
-        == Some(true);
+    for attr in attributes {
+        if attr.key == b"alt" {
+            alt = Some(String::from_utf8(attr.value.to_vec()).unwrap());
+        } else if attr.key == b"onerror" {
+            if attr.value.to_vec() == b"continue" {
+                continue_on_error = true;
+            } else {
+                warn!("Received an invalid value for `onerror`");
+            }
+        }
+    }
 
-    Ok(Event::ESI(Tag::Include {
+    let tag = Tag::Include {
         src,
         alt,
         continue_on_error,
-    }))
+    };
+
+    debug!("{:?}", tag);
+
+    Ok(Event::ESI(tag))
 }

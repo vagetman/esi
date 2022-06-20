@@ -12,23 +12,13 @@ service_id = "7Oyrwb6dUr5ISWCcDess2Z"
 
   [local_server.backends]
 
-    [local_server.backends."esi-test.edgecompute.app"]
-      url = "https://esi-test.edgecompute.app"
-
-    [local_server.backends."mock-s3.edgecompute.app"]
+    [local_server.backends."mock-s3"]
       url = "https://mock-s3.edgecompute.app"
-
-    [local_server.backends."127.0.0.1"]
-      url = "http://127.0.0.1"
 
 [setup]
 
   [setup.backends]
 
-    [setup.backends."esi-test.edgecompute.app"]
-      address = "esi-test.edgecompute.app"
-      port = 443
-
-    [setup.backends."mock-s3.edgecompute.app"]
+    [setup.backends."mock-s3"]
       address = "mock-s3.edgecompute.app"
       port = 443

@@ -1,9 +1,17 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-
-<body>
-  <h1>ESI demo</h1>
-  <esi:include src="https://esi-test.edgecompute.app/?delay=250&depth=3">this should be removed</esi:include>
-</body>
-
+  <head>
+    <title>My Shopping Website</title>
+  </head>
+  <body>
+    <header style="background: #f1f1f1; padding: 16px">
+      <h1>My Shopping Website</h1>
+    </header>
+    <div class="layout" style="display: flex">
+      <esi:include src="https://mock-s3.edgecompute.app/_fragments/sidebar.html" onerror="continue"/>
+      <esi:include src="/_fragments/content.html" onerror="continue"/>
+      <esi:include src="/_fragments/doesnotexist.html" alt="/_fragments/content.html"/>
+      <esi:include src="/_fragments/doesnotexist.html" onerror="continue"/>
+    </div>
+  </body>
 </html>

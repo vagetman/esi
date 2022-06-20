@@ -106,3 +106,31 @@ fn parse_invalid_include() -> Result<(), ExecutionError> {
 
     Ok(())
 }
+
+#[test]
+fn parse_basic_include_with_onerror() -> Result<(), ExecutionError> {
+    setup();
+
+    let input = "<esi:include src=\"/_fragments/content.html\" onerror=\"continue\"/>";
+    let mut parsed = false;
+
+    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+        if let Event::ESI(Tag::Include {
+            src,
+            alt,
+            continue_on_error,
+        }) = event
+        {
+            assert_eq!(src, "/_fragments/content.html");
+            assert_eq!(alt, None);
+            assert!(continue_on_error);
+            parsed = true;
+        }
+
+        Ok(())
+    })?;
+
+    assert!(parsed);
+
+    Ok(())
+}
