@@ -1,5 +1,5 @@
 use crate::{ExecutionError, Result};
-use log::{debug, warn};
+use log::debug;
 use quick_xml::events::BytesStart;
 use quick_xml::Reader;
 use std::io::BufRead;
@@ -99,9 +99,7 @@ where
 }
 
 fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
-    let mut attributes = elem.attributes().flatten();
-
-    let src = match attributes.find(|attr| attr.key == b"src") {
+    let src = match elem.attributes().flatten().find(|attr| attr.key == b"src") {
         Some(attr) => String::from_utf8(attr.value.to_vec()).unwrap(),
         None => {
             return Err(ExecutionError::MissingRequiredParameter(
@@ -111,28 +109,22 @@ fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
         }
     };
 
-    let mut alt = None;
-    let mut continue_on_error = false;
+    let alt = elem
+        .attributes()
+        .flatten()
+        .find(|attr| attr.key == b"alt")
+        .map(|attr| String::from_utf8(attr.value.to_vec()).unwrap());
 
-    for attr in attributes {
-        if attr.key == b"alt" {
-            alt = Some(String::from_utf8(attr.value.to_vec()).unwrap());
-        } else if attr.key == b"onerror" {
-            if attr.value.to_vec() == b"continue" {
-                continue_on_error = true;
-            } else {
-                warn!("Received an invalid value for `onerror`");
-            }
-        }
-    }
+    let continue_on_error = elem
+        .attributes()
+        .flatten()
+        .find(|attr| attr.key == b"onerror")
+        .map(|attr| &attr.value.to_vec() == b"continue")
+        == Some(true);
 
-    let tag = Tag::Include {
+    Ok(Event::ESI(Tag::Include {
         src,
         alt,
         continue_on_error,
-    };
-
-    debug!("{:?}", tag);
-
-    Ok(Event::ESI(tag))
+    }))
 }
