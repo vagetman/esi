@@ -1,6 +1,6 @@
 [package]
 name = "esi_example_app"
-version = "0.3.0-pre5"
+version = "0.3.0"
 authors = ["Kailan Blanks <kailan@enviark.com>"]
 edition = "2018"
 publish = false
