@@ -1,5 +1,6 @@
 use esi::Processor;
 use fastly::{http::StatusCode, mime, Error, Request, Response};
+use log::info;
 
 fn main() {
     env_logger::builder()
@@ -31,11 +32,14 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let config = esi::Configuration::default().with_recursion();
+        let config = esi::Configuration::default();
 
-        let processor = Processor::new(config);
+        let mut processor = Processor::new(beresp.into_body(), Some(req), config);
 
-        processor.execute_esi(req, beresp, &|req| Ok(req.with_ttl(120).send("mock-s3")?))?;
+        processor.execute(Some(&|(req, idx)| {
+            info!("Sending request {}", idx);
+            Ok(req.with_ttl(120).send_async("mock-s3")?)
+        }), None)?;
 
         Ok(())
     } else {

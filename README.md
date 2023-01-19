@@ -36,9 +36,12 @@ fn handle_request(req: Request) -> Result<(), Error> {
 
     // Execute the ESI document using the client request as context
     // and sending all requests to the backend `origin_1`.
-    processor.execute_esi(req, beresp, &|req| {
-        Ok(req.with_ttl(120).send("origin_1")?)
-    })?;
+    processor.execute_esi(
+        req,
+        beresp,
+        &|(req, _idx)| Ok(req.with_ttl(120).send_async("origin_1")?),
+        &|(resp, _idx)| Ok(resp),
+    )?;
 
     Ok(())
 }

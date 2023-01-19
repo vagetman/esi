@@ -1,6 +1,6 @@
 [package]
 name = "esi"
-version = "0.3.1"
+version = "0.4.0-pre1"
 description = "A streaming parser and executor for Edge Side Includes"
 repository = "https://github.com/fastly/esi"
 license = "MIT"
@@ -11,7 +11,7 @@ readme = "../README.md"
 [dependencies]
 quick-xml = "0.23.0"
 thiserror = "^1.0"
-fastly = "^0.8"
+fastly = "^0.9"
 log = "^0.4"
 
 [dev-dependencies]

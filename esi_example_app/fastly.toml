@@ -12,13 +12,16 @@ service_id = "7Oyrwb6dUr5ISWCcDess2Z"
 
   [local_server.backends]
 
-    [local_server.backends."mock-s3"]
+    [local_server.backends.mock-s3]
       url = "https://mock-s3.edgecompute.app"
+
+[scripts]
+  build = "cargo build --bin esi_example_app --release --target wasm32-wasi --color always"
 
 [setup]
 
   [setup.backends]
 
-    [setup.backends."mock-s3"]
+    [setup.backends.mock-s3]
       address = "mock-s3.edgecompute.app"
       port = 443
