@@ -112,6 +112,11 @@ impl Processor {
         dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<PendingRequest>>,
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
+        let dispatch_fragment_request = dispatch_fragment_request.unwrap_or({
+            // TODO: provide default
+            &|_| panic!("no dispatch request function provided")
+        });
+
         debug!("starting response stream");
 
         // Create a response to send the headers to the client
@@ -151,12 +156,22 @@ impl Processor {
                         debug!("got ESI");
 
                         // TODO: ALT AND CONTINUE ON ERROR
-                        let element = send_esi_fragment_request(
+                        let req = build_fragment_request(
                             original_request_metadata.clone_without_body(),
                             &src,
-                            dispatch_fragment_request.unwrap_or_else(|| {
-                                &|_| panic!("no dispatch request function provided")
-                            }),
+                        );
+                        let alt_req = alt.map(|alt| {
+                            build_fragment_request(
+                                original_request_metadata.clone_without_body(),
+                                &alt,
+                            )
+                        });
+
+                        let element = send_fragment_request(
+                            req,
+                            alt_req,
+                            continue_on_error,
+                            dispatch_fragment_request,
                         )?;
                         elements.push_back(element);
                     }
@@ -176,7 +191,12 @@ impl Processor {
                     }
                 }
 
-                poll_elements(&mut elements, &mut xml_writer, process_fragment_response)?;
+                poll_elements(
+                    &mut elements,
+                    &mut xml_writer,
+                    dispatch_fragment_request,
+                    process_fragment_response,
+                )?;
 
                 Ok(())
             },
@@ -188,29 +208,39 @@ impl Processor {
                 break;
             }
 
-            poll_elements(&mut elements, &mut xml_writer, process_fragment_response)?;
+            poll_elements(
+                &mut elements,
+                &mut xml_writer,
+                dispatch_fragment_request,
+                process_fragment_response,
+            )?;
         }
 
         Ok(())
     }
 }
 
-fn send_esi_fragment_request(
-    mut req: Request,
-    url: &str,
-    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
-) -> Result<Element> {
+fn build_fragment_request(mut request: Request, url: &str) -> Request {
     if url.starts_with('/') {
-        req.get_url_mut().set_path(url);
+        request.get_url_mut().set_path(url);
     } else {
-        req.set_url(url);
+        request.set_url(url);
     }
 
-    let hostname = req.get_url().host().expect("no host").to_string();
+    let hostname = request.get_url().host().expect("no host").to_string();
 
-    req.set_header(header::HOST, &hostname);
+    request.set_header(header::HOST, &hostname);
 
-    debug!("Requesting ESI fragment: {}", url);
+    request
+}
+
+fn send_fragment_request(
+    req: Request,
+    alt: Option<Request>,
+    continue_on_error: bool,
+    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
+) -> Result<Element> {
+    debug!("Requesting ESI fragment: {}", req.get_url());
 
     let req_metadata = req.clone_without_body();
 
@@ -222,7 +252,12 @@ fn send_esi_fragment_request(
         }
     };
 
-    Ok(Element::Fragment(req_metadata, pending_request))
+    Ok(Element::Fragment(
+        req_metadata,
+        alt,
+        continue_on_error,
+        pending_request,
+    ))
 }
 
 // This function is responsible for polling pending requests and writing their
@@ -231,6 +266,7 @@ fn send_esi_fragment_request(
 fn poll_elements(
     elements: &mut VecDeque<Element>,
     xml_writer: &mut Writer<StreamingBody>,
+    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
     process_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
 ) -> Result<()> {
     loop {
@@ -242,28 +278,56 @@ fn poll_elements(
                     debug!("writing previously queued other content");
                     xml_writer.inner().write_all(&raw).unwrap();
                 }
-                Element::Fragment(request, pending_request) => match pending_request.poll() {
-                    fastly::http::request::PollResult::Pending(pending_request) => {
-                        elements.insert(0, Element::Fragment(request, pending_request));
-                        break;
+                Element::Fragment(request, alt, continue_on_error, pending_request) => {
+                    match pending_request.poll() {
+                        fastly::http::request::PollResult::Pending(pending_request) => {
+                            elements.insert(
+                                0,
+                                Element::Fragment(request, alt, continue_on_error, pending_request),
+                            );
+                            break;
+                        }
+                        fastly::http::request::PollResult::Done(Ok(res)) => {
+                            if !res.get_status().is_success() {
+                                if let Some(alt) = alt {
+                                    debug!("request poll DONE ERROR, trying alt");
+                                    let pending_request = dispatch_request(alt)?;
+                                    elements.insert(
+                                        0,
+                                        Element::Fragment(
+                                            request,
+                                            None,
+                                            continue_on_error,
+                                            pending_request,
+                                        ),
+                                    );
+                                    break;
+                                } else if continue_on_error {
+                                    debug!("request poll DONE ERROR, NO ALT, continuing");
+                                    continue;
+                                } else {
+                                    debug!("request poll DONE ERROR, NO ALT, failing");
+                                    todo!("request failed non-continuable");
+                                }
+                            } else {
+                                let res = if let Some(process_response) = process_response {
+                                    process_response(request, res)?
+                                } else {
+                                    res
+                                };
+
+                                xml_writer
+                                    .inner()
+                                    .write_all(&res.into_body_bytes())
+                                    .unwrap();
+                                xml_writer.inner().flush().expect("failed to flush output");
+                            }
+                        }
+                        fastly::http::request::PollResult::Done(Err(_err)) => {
+                            todo!()
+                        }
                     }
-                    fastly::http::request::PollResult::Done(Ok(res)) => {
-                        debug!("request poll DONE SUCCESS");
-                        let res = if let Some(process_response) = process_response {
-                            process_response(request, res)?
-                        } else {
-                            res
-                        };
-                        xml_writer
-                            .inner()
-                            .write_all(&res.into_body_bytes())
-                            .unwrap();
-                        xml_writer.inner().flush().expect("failed to flush output");
-                    }
-                    fastly::http::request::PollResult::Done(Err(_err)) => {
-                        todo!()
-                    }
-                },
+                }
             }
         } else {
             break;

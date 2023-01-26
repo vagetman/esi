@@ -30,20 +30,37 @@ fn handle_request(req: Request) -> Result<(), Error> {
     // Fetch ESI document from backend.
     let beresp = req.clone_without_body().send("origin_0")?;
 
-    // Construct an ESI processor with the default configuration.
-    let config = esi::Configuration::default();
-    let processor = Processor::new(config);
+    // If the response is HTML, we can parse it for ESI tags.
+    if beresp
+        .get_content_type()
+        .map(|c| c.subtype() == mime::HTML)
+        .unwrap_or(false)
+    {
+        let config = esi::Configuration::default();
 
-    // Execute the ESI document using the client request as context
-    // and sending all requests to the backend `origin_1`.
-    processor.execute_esi(
-        req,
-        beresp,
-        &|(req, _idx)| Ok(req.with_ttl(120).send_async("origin_1")?),
-        &|(resp, _idx)| Ok(resp),
-    )?;
+        let processor = Processor::new(beresp.into_body(), Some(req), None, config);
 
-    Ok(())
+        processor.execute(
+            Some(&|req| {
+                println!("Sending request {} {}", req.get_method(), req.get_path());
+                Ok(req.with_ttl(120).send_async("mock-s3")?)
+            }),
+            Some(&|req, resp| {
+                println!(
+                    "Received response for {} {}",
+                    req.get_method(),
+                    req.get_path()
+                );
+                Ok(resp)
+            }),
+        )?;
+
+        Ok(())
+    } else {
+        // Otherwise, we can just return the response.
+        beresp.send_to_client();
+        Ok(())
+    }
 }
 ```
 
