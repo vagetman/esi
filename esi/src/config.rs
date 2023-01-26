@@ -3,9 +3,7 @@
 /// ## Usage Example
 /// ```rust,no_run
 /// let config = esi::Configuration::default()
-///     .with_namespace("app")
-///
-/// let processor = esi::Processor::new(config);
+///     .with_namespace("app");
 /// ```
 #[derive(Clone, Debug)]
 pub struct Configuration {
