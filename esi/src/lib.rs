@@ -38,7 +38,7 @@
 //!     processor.execute(
 //!         Some(&|req| {
 //!             println!("Sending request {} {}", req.get_method(), req.get_path());
-//!             Ok(req.with_ttl(120).send_async("origin_0")?)
+//!             Ok(Some(req.with_ttl(120).send_async("origin_0")?))
 //!         }),
 //!         Some(&|req, resp| {
 //!             println!(
@@ -109,7 +109,7 @@ impl Processor {
 
     pub fn execute(
         mut self,
-        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<PendingRequest>>,
+        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
         let dispatch_fragment_request = dispatch_fragment_request.unwrap_or({
@@ -155,7 +155,6 @@ impl Processor {
                     }) => {
                         debug!("got ESI");
 
-                        // TODO: ALT AND CONTINUE ON ERROR
                         let req = build_fragment_request(
                             original_request_metadata.clone_without_body(),
                             &src,
@@ -167,13 +166,14 @@ impl Processor {
                             )
                         });
 
-                        let element = send_fragment_request(
+                        if let Some(element) = send_fragment_request(
                             req,
                             alt_req,
                             continue_on_error,
                             dispatch_fragment_request,
-                        )?;
-                        elements.push_back(element);
+                        )? {
+                            elements.push_back(element);
+                        }
                     }
                     Event::XML(event) => {
                         debug!("got other content");
@@ -238,26 +238,30 @@ fn send_fragment_request(
     req: Request,
     alt: Option<Request>,
     continue_on_error: bool,
-    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
-) -> Result<Element> {
+    dispatch_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
+) -> Result<Option<Element>> {
     debug!("Requesting ESI fragment: {}", req.get_url());
 
     let req_metadata = req.clone_without_body();
 
     let pending_request = match dispatch_request(req) {
-        Ok(req) => req,
+        Ok(Some(req)) => req,
+        Ok(None) => {
+            debug!("No pending request returned, skipping");
+            return Ok(None);
+        }
         Err(err) => {
             error!("Failed to dispatch request: {:?}", err);
             return Err(err);
         }
     };
 
-    Ok(Element::Fragment(
+    Ok(Some(Element::Fragment(
         req_metadata,
         alt,
         continue_on_error,
         pending_request,
-    ))
+    )))
 }
 
 // This function is responsible for polling pending requests and writing their
@@ -266,7 +270,7 @@ fn send_fragment_request(
 fn poll_elements(
     elements: &mut VecDeque<Element>,
     xml_writer: &mut Writer<StreamingBody>,
-    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
+    dispatch_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
     process_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
 ) -> Result<()> {
     loop {
@@ -291,17 +295,21 @@ fn poll_elements(
                             if !res.get_status().is_success() {
                                 if let Some(alt) = alt {
                                     debug!("request poll DONE ERROR, trying alt");
-                                    let pending_request = dispatch_request(alt)?;
-                                    elements.insert(
-                                        0,
-                                        Element::Fragment(
-                                            request,
-                                            None,
-                                            continue_on_error,
-                                            pending_request,
-                                        ),
-                                    );
-                                    break;
+                                    if let Some(pending_request) = dispatch_request(alt)? {
+                                        elements.insert(
+                                            0,
+                                            Element::Fragment(
+                                                request,
+                                                None,
+                                                continue_on_error,
+                                                pending_request,
+                                            ),
+                                        );
+                                        break;
+                                    } else {
+                                        debug!("guest returned None, continuing");
+                                        continue;
+                                    }
                                 } else if continue_on_error {
                                     debug!("request poll DONE ERROR, NO ALT, continuing");
                                     continue;
