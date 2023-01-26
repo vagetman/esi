@@ -25,30 +25,37 @@
 //!     // Fetch ESI document from backend.
 //!     let beresp = req.clone_without_body().send("origin_0")?;
 //!
-//!     // Construct an ESI processor with the default configuration.
-//!     let config = esi::Configuration::default();
-//!     let mut processor = Processor::new(config);
+//!     // Initialize processor with default configuration, passing in the
+//!     // client request and backend response (ESI document).
+//!     let processor = Processor::new(
+//!         beresp.into_body(),
+//!         Some(req),
+//!         None,
+//!         esi::Configuration::default();
+//!     );
 //!
-//!     // Execute the ESI document using the client request as context
-//!     // and sending all requests to the backend `origin_1`.
-//      processor.execute_esi(
-//          req,
-//          beresp,
-//          &|(req, idx)| {
-//              println!("Sending request {}", idx);
-//              Ok(req.with_ttl(120).send_async("mock-s3")?)
-//          },
-//          &|(resp, idx)| {
-//              println!("Received response {}", idx);
-//              Ok(resp)
-//          },
-//      )?;
+//!     // Execute the processor, passing in callbacks for sending requests and processing responses.
+//!     processor.execute(
+//!         Some(&|req| {
+//!             println!("Sending request {} {}", req.get_method(), req.get_path());
+//!             Ok(req.with_ttl(120).send_async("origin_0")?)
+//!         }),
+//!         Some(&|req, resp| {
+//!             println!(
+//!                 "Received response for {} {}",
+//!                 req.get_method(),
+//!                 req.get_path()
+//!             );
+//!             Ok(resp)
+//!         }),
+//!     )?;
 //!
 //!     Ok(())
 //! }
 //! ```
 
 mod config;
+mod document;
 mod error;
 mod parse;
 
@@ -61,6 +68,7 @@ use quick_xml::{Reader, Writer};
 use std::collections::VecDeque;
 use std::io::Write;
 
+pub use crate::document::Element;
 use crate::error::Result;
 pub use crate::parse::{parse_tags, Event, Tag};
 
@@ -69,58 +77,47 @@ pub use crate::error::ExecutionError;
 
 /// An instance of the ESI processor with a given configuration.
 pub struct Processor {
+    // The XML reader for the source document.
     xml_reader: Reader<Body>,
+    // The original client request metadata, if any.
     original_request_metadata: Option<Request>,
+    // The response headers to send to the client.
+    client_response_metadata: Option<Response>,
+    // The configuration for the processor.
     configuration: Configuration,
-}
-
-pub struct RequestMeta {
-    idx: usize,
-    alt: Option<String>,
-    continue_on_error: bool,
-}
-
-pub enum Element {
-    Raw(Vec<u8>),
-    Fragment((PendingRequest, usize)),
-}
-
-impl std::fmt::Debug for Element {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Element::Raw(_) => write!(f, "Raw"),
-            Element::Fragment(_) => write!(f, "Fragment"),
-        }
-    }
 }
 
 impl Processor {
     pub fn new(
-        document: Body,
+        src_document: Body,
         original_request_metadata: Option<Request>,
+        client_response_metadata: Option<Response>,
         configuration: Configuration,
     ) -> Self {
         // Create a parser for the ESI document
-        let xml_reader = reader_from_body(document);
+        let xml_reader = reader_from_body(src_document);
 
         debug!("processor initialized");
 
         Self {
             xml_reader,
             original_request_metadata,
+            client_response_metadata,
             configuration,
         }
     }
 
     pub fn execute(
-        &mut self,
-        dispatch_request: Option<&dyn Fn((Request, usize)) -> Result<PendingRequest>>,
-        process_response: Option<&dyn Fn((Response, usize)) -> Result<Response>>,
+        mut self,
+        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<PendingRequest>>,
+        process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
         debug!("starting response stream");
 
         // Create a response to send the headers to the client
-        let resp = Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML); // TODO: make this configurable
+        let resp = self.client_response_metadata.unwrap_or_else(|| {
+            Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
+        });
 
         // Send the response headers to the client and open an output stream
         let output_stream = resp.stream_to_client();
@@ -130,16 +127,17 @@ impl Processor {
 
         debug!("parsing document");
 
+        // Set up the queue of document elements to be sent to the client.
         let mut elements: VecDeque<Element> = VecDeque::new();
 
+        // If there is a source request to mimic, copy its metadata, otherwise use a default request.
         let original_request_metadata = if let Some(req) = &self.original_request_metadata {
             req.clone_without_body()
         } else {
             Request::new(Method::GET, "http://localhost")
         };
 
-        let mut req_count = 0;
-
+        // Begin parsing the source document
         parse_tags(
             &self.configuration.namespace.clone(),
             &mut self.xml_reader,
@@ -152,15 +150,13 @@ impl Processor {
                     }) => {
                         debug!("got ESI");
 
-                        req_count += 1;
-
+                        // TODO: ALT AND CONTINUE ON ERROR
                         let element = send_esi_fragment_request(
                             original_request_metadata.clone_without_body(),
                             &src,
-                            dispatch_request.unwrap_or_else(|| {
+                            dispatch_fragment_request.unwrap_or_else(|| {
                                 &|_| panic!("no dispatch request function provided")
                             }),
-                            req_count,
                         )?;
                         elements.push_back(element);
                     }
@@ -180,7 +176,7 @@ impl Processor {
                     }
                 }
 
-                poll_elements(&mut elements, &mut xml_writer)?;
+                poll_elements(&mut elements, &mut xml_writer, process_fragment_response)?;
 
                 Ok(())
             },
@@ -192,7 +188,7 @@ impl Processor {
                 break;
             }
 
-            poll_elements(&mut elements, &mut xml_writer)?;
+            poll_elements(&mut elements, &mut xml_writer, process_fragment_response)?;
         }
 
         Ok(())
@@ -202,8 +198,7 @@ impl Processor {
 fn send_esi_fragment_request(
     mut req: Request,
     url: &str,
-    dispatch_request: &dyn Fn((Request, usize)) -> Result<PendingRequest>,
-    idx: usize,
+    dispatch_request: &dyn Fn(Request) -> Result<PendingRequest>,
 ) -> Result<Element> {
     if url.starts_with('/') {
         req.get_url_mut().set_path(url);
@@ -217,7 +212,9 @@ fn send_esi_fragment_request(
 
     debug!("Requesting ESI fragment: {}", url);
 
-    let req = match dispatch_request((req, idx)) {
+    let req_metadata = req.clone_without_body();
+
+    let pending_request = match dispatch_request(req) {
         Ok(req) => req,
         Err(err) => {
             error!("Failed to dispatch request: {:?}", err);
@@ -225,12 +222,16 @@ fn send_esi_fragment_request(
         }
     };
 
-    Ok(Element::Fragment((req, idx)))
+    Ok(Element::Fragment(req_metadata, pending_request))
 }
 
+// This function is responsible for polling pending requests and writing their
+// responses to the client output stream. It also handles any queued source
+// content that needs to be written to the client output stream.
 fn poll_elements(
     elements: &mut VecDeque<Element>,
     xml_writer: &mut Writer<StreamingBody>,
+    process_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
 ) -> Result<()> {
     loop {
         let element = elements.pop_front();
@@ -241,21 +242,27 @@ fn poll_elements(
                     debug!("writing previously queued other content");
                     xml_writer.inner().write_all(&raw).unwrap();
                 }
-                Element::Fragment((pending_request, idx)) => match pending_request.poll() {
+                Element::Fragment(request, pending_request) => match pending_request.poll() {
                     fastly::http::request::PollResult::Pending(pending_request) => {
-                        elements.insert(0, Element::Fragment((pending_request, idx)));
+                        elements.insert(0, Element::Fragment(request, pending_request));
                         break;
                     }
                     fastly::http::request::PollResult::Done(Ok(res)) => {
                         debug!("request poll DONE SUCCESS");
+                        let res = if let Some(process_response) = process_response {
+                            process_response(request, res)?
+                        } else {
+                            res
+                        };
                         xml_writer
                             .inner()
                             .write_all(&res.into_body_bytes())
                             .unwrap();
                         xml_writer.inner().flush().expect("failed to flush output");
-                        debug!("response {} sent to client", idx);
                     }
-                    fastly::http::request::PollResult::Done(Err(err)) => todo!(),
+                    fastly::http::request::PollResult::Done(Err(_err)) => {
+                        todo!()
+                    }
                 },
             }
         } else {
@@ -266,6 +273,7 @@ fn poll_elements(
     Ok(())
 }
 
+// Helper function to create an XML reader from a body.
 fn reader_from_body(body: Body) -> Reader<Body> {
     let mut reader = Reader::from_reader(body);
 

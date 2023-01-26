@@ -10,7 +10,7 @@
 #[derive(Clone, Debug)]
 pub struct Configuration {
     /// The XML namespace to use when scanning for ESI tags. Defaults to `esi`.
-    pub namespace: String
+    pub namespace: String,
 }
 
 impl Default for Configuration {

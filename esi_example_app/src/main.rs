@@ -34,12 +34,22 @@ fn handle_request(req: Request) -> Result<(), Error> {
     {
         let config = esi::Configuration::default();
 
-        let mut processor = Processor::new(beresp.into_body(), Some(req), config);
+        let processor = Processor::new(beresp.into_body(), Some(req), None, config);
 
-        processor.execute(Some(&|(req, idx)| {
-            info!("Sending request {}", idx);
-            Ok(req.with_ttl(120).send_async("mock-s3")?)
-        }), None)?;
+        processor.execute(
+            Some(&|req| {
+                info!("Sending request {} {}", req.get_method(), req.get_path());
+                Ok(req.with_ttl(120).send_async("mock-s3")?)
+            }),
+            Some(&|req, resp| {
+                info!(
+                    "Received response for {} {}",
+                    req.get_method(),
+                    req.get_path()
+                );
+                Ok(resp)
+            }),
+        )?;
 
         Ok(())
     } else {
