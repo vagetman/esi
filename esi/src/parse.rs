@@ -60,16 +60,22 @@ where
             _ if remove => continue,
 
             // Handle <esi:include> tags, and ignore the contents if they are not self-closing
-            Ok(quick_xml::events::Event::Empty(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::Empty(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 callback(parse_include(&elem)?)?;
             }
 
-            Ok(quick_xml::events::Event::Start(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::Start(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 open_include = true;
                 callback(parse_include(&elem)?)?;
             }
 
-            Ok(quick_xml::events::Event::End(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::End(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 if !open_include {
                     return Err(ExecutionError::UnexpectedClosingTag(
                         String::from_utf8(elem.to_vec()).unwrap(),
@@ -82,7 +88,9 @@ where
             _ if open_include => continue,
 
             // Ignore <esi:comment> tags
-            Ok(quick_xml::events::Event::Empty(elem)) if elem.name().into_inner().starts_with(&esi_comment) => {
+            Ok(quick_xml::events::Event::Empty(elem))
+                if elem.name().into_inner().starts_with(&esi_comment) =>
+            {
                 continue
             }
 
@@ -99,7 +107,11 @@ where
 }
 
 fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
-    let src = match elem.attributes().flatten().find(|attr| attr.key.into_inner() == b"src") {
+    let src = match elem
+        .attributes()
+        .flatten()
+        .find(|attr| attr.key.into_inner() == b"src")
+    {
         Some(attr) => String::from_utf8(attr.value.to_vec()).unwrap(),
         None => {
             return Err(ExecutionError::MissingRequiredParameter(
