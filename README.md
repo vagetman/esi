@@ -36,15 +36,26 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let config = esi::Configuration::default();
-
-        let processor = Processor::new(beresp.into_body(), Some(req), None, config);
+        let processor = Processor::new(
+            // The ESI source document.
+            beresp.into_body(),
+            // The original client request.
+            Some(req),
+            // Optionally provide a template for the client response.
+            Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
+            // Use the default ESI configuration.
+            esi::Configuration::default()
+        );
 
         processor.execute(
+            // Provide logic for sending fragment requests, otherwise the hostname
+            // of the request URL will be used as the backend name.
             Some(&|req| {
                 println!("Sending request {} {}", req.get_method(), req.get_path());
                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))
             }),
+            // Optionally provide a method to process fragment responses before they
+            // are streamed to the client.
             Some(&|req, resp| {
                 println!(
                     "Received response for {} {}",

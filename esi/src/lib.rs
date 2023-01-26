@@ -25,32 +25,48 @@
 //!     // Fetch ESI document from backend.
 //!     let beresp = req.clone_without_body().send("origin_0")?;
 //!
-//!     // Initialize processor with default configuration, passing in the
-//!     // client request and backend response (ESI document).
-//!     let processor = Processor::new(
-//!         beresp.into_body(),
-//!         Some(req),
-//!         None,
-//!         esi::Configuration::default();
-//!     );
+//!     // If the response is HTML, we can parse it for ESI tags.
+//!     if beresp
+//!         .get_content_type()
+//!         .map(|c| c.subtype() == mime::HTML)
+//!         .unwrap_or(false)
+//!     {
+//!         let processor = Processor::new(
+//!             // The ESI source document.
+//!             beresp.into_body(),
+//!             // The original client request.
+//!             Some(req),
+//!             // Optionally provide a template for the client response.
+//!             Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
+//!             // Use the default ESI configuration.
+//!             esi::Configuration::default()
+//!         );
 //!
-//!     // Execute the processor, passing in callbacks for sending requests and processing responses.
-//!     processor.execute(
-//!         Some(&|req| {
-//!             println!("Sending request {} {}", req.get_method(), req.get_path());
-//!             Ok(Some(req.with_ttl(120).send_async("origin_0")?))
-//!         }),
-//!         Some(&|req, resp| {
-//!             println!(
-//!                 "Received response for {} {}",
-//!                 req.get_method(),
-//!                 req.get_path()
-//!             );
-//!             Ok(resp)
-//!         }),
-//!     )?;
+//!         processor.execute(
+//!             // Provide logic for sending fragment requests, otherwise the hostname
+//!             // of the request URL will be used as the backend name.
+//!             Some(&|req| {
+//!                 println!("Sending request {} {}", req.get_method(), req.get_path());
+//!                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))
+//!             }),
+//!             // Optionally provide a method to process fragment responses before they
+//!             // are streamed to the client.
+//!             Some(&|req, resp| {
+//!                 println!(
+//!                     "Received response for {} {}",
+//!                     req.get_method(),
+//!                     req.get_path()
+//!                 );
+//!                 Ok(resp)
+//!             }),
+//!         )?;
 //!
-//!     Ok(())
+//!         Ok(())
+//!     } else {
+//!         // Otherwise, we can just return the response.
+//!         beresp.send_to_client();
+//!         Ok(())
+//!     }
 //! }
 //! ```
 
@@ -113,8 +129,16 @@ impl Processor {
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
         let dispatch_fragment_request = dispatch_fragment_request.unwrap_or({
-            // TODO: provide default
-            &|_| panic!("no dispatch request function provided")
+            &|req| {
+                debug!("no dispatch method configured, defaulting to hostname");
+                let backend = req
+                    .get_url()
+                    .host()
+                    .unwrap_or_else(|| panic!("no host in request: {}", req.get_url()))
+                    .to_string();
+                let pending_req = req.send_async(backend)?;
+                Ok(Some(pending_req))
+            }
         });
 
         debug!("starting response stream");
@@ -285,6 +309,7 @@ fn poll_elements(
                 Element::Fragment(request, alt, continue_on_error, pending_request) => {
                     match pending_request.poll() {
                         fastly::http::request::PollResult::Pending(pending_request) => {
+                            // Request is still pending, re-add it to the front of the queue and wait for the next poll.
                             elements.insert(
                                 0,
                                 Element::Fragment(request, alt, continue_on_error, pending_request),
@@ -292,6 +317,7 @@ fn poll_elements(
                             break;
                         }
                         fastly::http::request::PollResult::Done(Ok(res)) => {
+                            // Request has completed, check the status code and either continue, fallback to an alt, or fail.
                             if !res.get_status().is_success() {
                                 if let Some(alt) = alt {
                                     debug!("request poll DONE ERROR, trying alt");
@@ -318,12 +344,14 @@ fn poll_elements(
                                     todo!("request failed non-continuable");
                                 }
                             } else {
+                                // Response status is success, let the guest app process it if needed.
                                 let res = if let Some(process_response) = process_response {
                                     process_response(request, res)?
                                 } else {
                                     res
                                 };
 
+                                // Write the response body to the output stream.
                                 xml_writer
                                     .inner()
                                     .write_all(&res.into_body_bytes())
