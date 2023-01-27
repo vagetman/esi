@@ -39,7 +39,7 @@
 //!             esi::Configuration::default()
 //!         );
 //!
-//!         processor.execute(
+//!         processor.process_response(
 //!             // The ESI source document. Note that the body will be consumed.
 //!             &mut beresp,
 //!             // Provide logic for sending fragment requests, otherwise the hostname

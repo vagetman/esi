@@ -1,9 +1,5 @@
 # esi
 
-//TODO BEFORE RELEASE
-- error handling
-
-
 A streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
 
 The implementation is currently a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), supporting the following tags:
@@ -48,7 +44,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
             esi::Configuration::default()
         );
 
-        processor.execute(
+        processor.process_response(
             // The ESI source document. Note that the body will be consumed.
             &mut beresp,
             // Provide logic for sending fragment requests, otherwise the hostname
