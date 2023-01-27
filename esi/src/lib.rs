@@ -8,7 +8,6 @@
 //! ## Usage Example
 //!
 //! ```rust,no_run
-//! use esi::Processor;
 //! use fastly::{http::StatusCode, mime, Error, Request, Response};
 //!
 //! fn main() {
@@ -31,7 +30,7 @@
 //!         .map(|c| c.subtype() == mime::HTML)
 //!         .unwrap_or(false)
 //!     {
-//!         let processor = Processor::new(
+//!         let processor = esi::Processor::new(
 //!             // The original client request.
 //!             Some(req),
 //!             // Optionally provide a template for the client response.
@@ -41,7 +40,7 @@
 //!         );
 //!
 //!         processor.execute(
-//!             // The ESI source document.
+//!             // The ESI source document. Note that the body will be consumed.
 //!             &mut beresp,
 //!             // Provide logic for sending fragment requests, otherwise the hostname
 //!             // of the request URL will be used as the backend name.
@@ -75,7 +74,6 @@ mod document;
 mod error;
 mod parse;
 
-use fastly::http::body::StreamingBody;
 use fastly::http::request::PendingRequest;
 use fastly::http::{header, Method, StatusCode};
 use fastly::{mime, Body, Request, Response};
@@ -134,21 +132,30 @@ impl Processor {
         let output_writer = resp.stream_to_client();
 
         // Set up an XML writer to write directly to the client output stream.
-        let xml_writer = Writer::new(output_writer);
+        let mut xml_writer = Writer::new(output_writer);
 
-        self.process_document(
+        match self.process_document(
             reader_from_body(src_document.take_body()),
-            xml_writer,
+            &mut xml_writer,
             dispatch_fragment_request,
             process_fragment_response,
-        )
+        ) {
+            Ok(()) => {
+                xml_writer.into_inner().finish().unwrap();
+                Ok(())
+            }
+            Err(err) => {
+                error!("error processing ESI document: {}", err);
+                Err(err)
+            }
+        }
     }
 
     /// Process an ESI document from a [`quick_xml::Reader`].
     pub fn process_document(
         self,
         mut src_document: Reader<impl BufRead>,
-        mut output_writer: Writer<impl Write>,
+        output_writer: &mut Writer<impl Write>,
         dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
@@ -164,10 +171,6 @@ impl Processor {
                 Ok(Some(pending_req))
             }
         });
-
-        debug!("starting response stream");
-
-        debug!("parsing document");
 
         // Set up the queue of document elements to be sent to the client.
         let mut elements: VecDeque<Element> = VecDeque::new();
@@ -233,7 +236,7 @@ impl Processor {
 
                 poll_elements(
                     &mut elements,
-                    &mut output_writer,
+                    output_writer,
                     dispatch_fragment_request,
                     process_fragment_response,
                 )?;
@@ -250,7 +253,7 @@ impl Processor {
 
             poll_elements(
                 &mut elements,
-                &mut output_writer,
+                output_writer,
                 dispatch_fragment_request,
                 process_fragment_response,
             )?;

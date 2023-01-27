@@ -1,4 +1,3 @@
-use esi::{Element, Processor};
 use fastly::{http::StatusCode, mime, Error, Request, Response};
 use log::info;
 
@@ -33,9 +32,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let config = esi::Configuration::default();
-
-        let processor = Processor::new(Some(req), None, config);
+        let processor = esi::Processor::new(Some(req), None, esi::Configuration::default());
 
         processor.process_response(
             &mut beresp,

@@ -17,7 +17,6 @@ Other tags will be ignored.
 ## Example Usage
 
 ```rust,no_run
-use esi::Processor;
 use fastly::{http::StatusCode, mime, Error, Request, Response};
 
 fn main() {
@@ -40,7 +39,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let processor = Processor::new(
+        let processor = esi::Processor::new(
             // The original client request.
             Some(req),
             // Optionally provide a template for the client response.
@@ -50,7 +49,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
         );
 
         processor.execute(
-            // The ESI source document.
+            // The ESI source document. Note that the body will be consumed.
             &mut beresp,
             // Provide logic for sending fragment requests, otherwise the hostname
             // of the request URL will be used as the backend name.
