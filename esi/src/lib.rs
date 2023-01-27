@@ -23,7 +23,7 @@
 //!
 //! fn handle_request(req: Request) -> Result<(), Error> {
 //!     // Fetch ESI document from backend.
-//!     let beresp = req.clone_without_body().send("origin_0")?;
+//!     let mut beresp = req.clone_without_body().send("origin_0")?;
 //!
 //!     // If the response is HTML, we can parse it for ESI tags.
 //!     if beresp
@@ -32,8 +32,6 @@
 //!         .unwrap_or(false)
 //!     {
 //!         let processor = Processor::new(
-//!             // The ESI source document.
-//!             beresp.into_body(),
 //!             // The original client request.
 //!             Some(req),
 //!             // Optionally provide a template for the client response.
@@ -43,6 +41,8 @@
 //!         );
 //!
 //!         processor.execute(
+//!             // The ESI source document.
+//!             &mut beresp,
 //!             // Provide logic for sending fragment requests, otherwise the hostname
 //!             // of the request URL will be used as the backend name.
 //!             Some(&|req| {
@@ -82,7 +82,7 @@ use fastly::{mime, Body, Request, Response};
 use log::{debug, error};
 use quick_xml::{Reader, Writer};
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{BufRead, Write};
 
 pub use crate::document::Element;
 use crate::error::Result;
@@ -93,8 +93,6 @@ pub use crate::error::ExecutionError;
 
 /// An instance of the ESI processor with a given configuration.
 pub struct Processor {
-    // The XML reader for the source document.
-    xml_reader: Reader<Body>,
     // The original client request metadata, if any.
     original_request_metadata: Option<Request>,
     // The response headers to send to the client.
@@ -105,26 +103,52 @@ pub struct Processor {
 
 impl Processor {
     pub fn new(
-        src_document: Body,
         original_request_metadata: Option<Request>,
         client_response_metadata: Option<Response>,
         configuration: Configuration,
     ) -> Self {
-        // Create a parser for the ESI document
-        let xml_reader = reader_from_body(src_document);
-
-        debug!("processor initialized");
-
         Self {
-            xml_reader,
             original_request_metadata,
             client_response_metadata,
             configuration,
         }
     }
 
-    pub fn execute(
-        mut self,
+    /// Process a response body as an ESI document. Consumes the response body.
+    pub fn process_response(
+        self,
+        src_document: &mut Response,
+        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
+        process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
+    ) -> Result<()> {
+        // Create a response to send the headers to the client
+        let resp = self
+            .client_response_metadata
+            .as_ref()
+            .map(|c| c.clone_without_body())
+            .unwrap_or_else(|| {
+                Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
+            });
+
+        // Send the response headers to the client and open an output stream
+        let output_writer = resp.stream_to_client();
+
+        // Set up an XML writer to write directly to the client output stream.
+        let xml_writer = Writer::new(output_writer);
+
+        self.process_document(
+            reader_from_body(src_document.take_body()),
+            xml_writer,
+            dispatch_fragment_request,
+            process_fragment_response,
+        )
+    }
+
+    /// Process an ESI document from a [`quick_xml::Reader`].
+    pub fn process_document(
+        self,
+        mut src_document: Reader<impl BufRead>,
+        mut output_writer: Writer<impl Write>,
         dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
@@ -143,17 +167,6 @@ impl Processor {
 
         debug!("starting response stream");
 
-        // Create a response to send the headers to the client
-        let resp = self.client_response_metadata.unwrap_or_else(|| {
-            Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
-        });
-
-        // Send the response headers to the client and open an output stream
-        let output_stream = resp.stream_to_client();
-
-        // Set up an XML writer to write directly to the client output stream.
-        let mut xml_writer = Writer::new(output_stream);
-
         debug!("parsing document");
 
         // Set up the queue of document elements to be sent to the client.
@@ -168,8 +181,8 @@ impl Processor {
 
         // Begin parsing the source document
         parse_tags(
-            &self.configuration.namespace.clone(),
-            &mut self.xml_reader,
+            &self.configuration.namespace,
+            &mut src_document,
             &mut |event| {
                 match event {
                     Event::ESI(Tag::Include {
@@ -203,8 +216,11 @@ impl Processor {
                         debug!("got other content");
                         if elements.is_empty() {
                             debug!("nothing waiting so streaming directly to client");
-                            xml_writer.write_event(event)?;
-                            xml_writer.inner().flush().expect("failed to flush output");
+                            output_writer.write_event(event)?;
+                            output_writer
+                                .inner()
+                                .flush()
+                                .expect("failed to flush output");
                         } else {
                             debug!("pushing content to buffer, len: {}", elements.len());
                             let mut vec = Vec::new();
@@ -217,7 +233,7 @@ impl Processor {
 
                 poll_elements(
                     &mut elements,
-                    &mut xml_writer,
+                    &mut output_writer,
                     dispatch_fragment_request,
                     process_fragment_response,
                 )?;
@@ -234,7 +250,7 @@ impl Processor {
 
             poll_elements(
                 &mut elements,
-                &mut xml_writer,
+                &mut output_writer,
                 dispatch_fragment_request,
                 process_fragment_response,
             )?;
@@ -293,9 +309,9 @@ fn send_fragment_request(
 // content that needs to be written to the client output stream.
 fn poll_elements(
     elements: &mut VecDeque<Element>,
-    xml_writer: &mut Writer<StreamingBody>,
-    dispatch_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
-    process_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
+    output_writer: &mut Writer<impl Write>,
+    dispatch_fragment_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
+    process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
 ) -> Result<()> {
     loop {
         let element = elements.pop_front();
@@ -304,7 +320,7 @@ fn poll_elements(
             match element {
                 Element::Raw(raw) => {
                     debug!("writing previously queued other content");
-                    xml_writer.inner().write_all(&raw).unwrap();
+                    output_writer.inner().write_all(&raw).unwrap();
                 }
                 Element::Fragment(request, alt, continue_on_error, pending_request) => {
                     match pending_request.poll() {
@@ -321,7 +337,7 @@ fn poll_elements(
                             if !res.get_status().is_success() {
                                 if let Some(alt) = alt {
                                     debug!("request poll DONE ERROR, trying alt");
-                                    if let Some(pending_request) = dispatch_request(alt)? {
+                                    if let Some(pending_request) = dispatch_fragment_request(alt)? {
                                         elements.insert(
                                             0,
                                             Element::Fragment(
@@ -345,18 +361,22 @@ fn poll_elements(
                                 }
                             } else {
                                 // Response status is success, let the guest app process it if needed.
-                                let res = if let Some(process_response) = process_response {
+                                let res = if let Some(process_response) = process_fragment_response
+                                {
                                     process_response(request, res)?
                                 } else {
                                     res
                                 };
 
                                 // Write the response body to the output stream.
-                                xml_writer
+                                output_writer
                                     .inner()
                                     .write_all(&res.into_body_bytes())
                                     .unwrap();
-                                xml_writer.inner().flush().expect("failed to flush output");
+                                output_writer
+                                    .inner()
+                                    .flush()
+                                    .expect("failed to flush output");
                             }
                         }
                         fastly::http::request::PollResult::Done(Err(_err)) => {

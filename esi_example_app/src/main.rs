@@ -1,4 +1,4 @@
-use esi::Processor;
+use esi::{Element, Processor};
 use fastly::{http::StatusCode, mime, Error, Request, Response};
 use log::info;
 
@@ -24,7 +24,8 @@ fn handle_request(req: Request) -> Result<(), Error> {
 
     // Generate synthetic test response from "index.html" file.
     // You probably want replace this with a backend call, e.g. `req.clone_without_body().send("origin_0")`
-    let beresp = Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
+    let mut beresp =
+        Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
 
     // If the response is HTML, we can parse it for ESI tags.
     if beresp
@@ -34,9 +35,10 @@ fn handle_request(req: Request) -> Result<(), Error> {
     {
         let config = esi::Configuration::default();
 
-        let processor = Processor::new(beresp.into_body(), Some(req), None, config);
+        let processor = Processor::new(Some(req), None, config);
 
-        processor.execute(
+        processor.process_response(
+            &mut beresp,
             Some(&|req| {
                 info!("Sending request {} {}", req.get_method(), req.get_path());
                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))

@@ -32,7 +32,7 @@ fn main() {
 
 fn handle_request(req: Request) -> Result<(), Error> {
     // Fetch ESI document from backend.
-    let beresp = req.clone_without_body().send("origin_0")?;
+    let mut beresp = req.clone_without_body().send("origin_0")?;
 
     // If the response is HTML, we can parse it for ESI tags.
     if beresp
@@ -41,8 +41,6 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .unwrap_or(false)
     {
         let processor = Processor::new(
-            // The ESI source document.
-            beresp.into_body(),
             // The original client request.
             Some(req),
             // Optionally provide a template for the client response.
@@ -52,6 +50,8 @@ fn handle_request(req: Request) -> Result<(), Error> {
         );
 
         processor.execute(
+            // The ESI source document.
+            &mut beresp,
             // Provide logic for sending fragment requests, otherwise the hostname
             // of the request URL will be used as the backend name.
             Some(&|req| {
