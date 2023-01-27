@@ -187,14 +187,13 @@ impl Processor {
             &self.configuration.namespace,
             &mut src_document,
             &mut |event| {
+                debug!("got {:?}", event);
                 match event {
                     Event::ESI(Tag::Include {
                         src,
                         alt,
                         continue_on_error,
                     }) => {
-                        debug!("got ESI");
-
                         let req = build_fragment_request(
                             original_request_metadata.clone_without_body(),
                             &src,
@@ -216,7 +215,6 @@ impl Processor {
                         }
                     }
                     Event::XML(event) => {
-                        debug!("got other content");
                         if elements.is_empty() {
                             debug!("nothing waiting so streaming directly to client");
                             output_writer.write_event(event)?;
@@ -360,7 +358,7 @@ fn poll_elements(
                                     continue;
                                 } else {
                                     debug!("request poll DONE ERROR, NO ALT, failing");
-                                    todo!("request failed non-continuable");
+                                    return Err(ExecutionError::UnexpectedStatus(res.get_status().into()));
                                 }
                             } else {
                                 // Response status is success, let the guest app process it if needed.
@@ -382,8 +380,8 @@ fn poll_elements(
                                     .expect("failed to flush output");
                             }
                         }
-                        fastly::http::request::PollResult::Done(Err(_err)) => {
-                            todo!()
+                        fastly::http::request::PollResult::Done(Err(err)) => {
+                            return Err(ExecutionError::RequestError(err))
                         }
                     }
                 }
