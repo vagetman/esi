@@ -1,0 +1,14 @@
+<div style="position: absolute; top: 0; left: 0; width: 100%; height: 100vh; background-color: #fff; z-index: 9999; font-family: system-ui,-apple-system,BlinkMacSystemFont,\&quot\;Segoe UI\&quot\;,Roboto,\&quot\;Helvetica Neue\&quot\;,Helvetica,Arial,sans-serif;">
+  <header style="background-color: #e82c2a; color: #fff; margin-bottom: 8px;">
+    <div style="margin: auto; max-width: 1400px; padding: 6px 20px; display: flex; gap: 8px;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 302.6 343.6" style="fill: #fff; height: 30px; width: 30px;">
+        <path d="m217 168-6-6-28 25a14 14 0 0 0-5-1 14 14 0 1 0 14 14 15 15 0 0 0-1-4Z" transform="translate(-29 -8)"/>
+        <path d="M207 52V27h9V8h-74v19h9v25a151 151 0 1 0 57 0Zm-27 71Zm4 155v-8h-9v8a78 78 0 0 1-73-73h9v-9h-9a78 78 0 0 1 73-73v9h9v-9a78 78 0 0 1 74 73h-9v9h9a78 78 0 0 1-74 73Z" transform="translate(-29 -8)"/>
+      </svg>
+      <h1 style="font-size: 1.5rem; font-weight: 300; line-height: 1; margin: 0; padding: 4px;">fastly/esi</h1>
+    </div>
+  </header>
+  <div style="margin: auto; max-width: 1400px; padding: 6px 20px;">
+    An error occurred while trying to serve this document. If you are the owner of this site, please check the Compute@Edge logs for more information.
+  </div>
+</div>

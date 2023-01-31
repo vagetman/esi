@@ -1,12 +1,12 @@
 # This file describes a Fastly Compute@Edge package. To learn more visit:
 # https://developer.fastly.com/reference/fastly-toml/
 
-authors = ["kailan@enviark.com"]
+authors = ["kblanks@fastly.com"]
 description = ""
 language = "rust"
 manifest_version = 2
-name = "esi_example_app"
-service_id = "7Oyrwb6dUr5ISWCcDess2Z"
+name = "esi_example_advanced_error_handling"
+service_id = ""
 
 [local_server]
 
@@ -16,7 +16,7 @@ service_id = "7Oyrwb6dUr5ISWCcDess2Z"
       url = "https://mock-s3.edgecompute.app"
 
 [scripts]
-  build = "cargo build --bin esi_example_app --release --target wasm32-wasi --color always"
+  build = "cargo build --bin esi_example_advanced_error_handling --release --target wasm32-wasi --color always"
 
 [setup]
 
