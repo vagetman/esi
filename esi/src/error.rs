@@ -18,13 +18,17 @@ pub enum ExecutionError {
     #[error("unexpected `{0}` closing tag")]
     UnexpectedClosingTag(String),
 
+    // One or more of the URLs in the ESI template were invalid.
+    #[error("invalid request URL provided: `{0}`")]
+    InvalidRequestUrl(String),
+
     /// An error occurred when sending a fragment request to a backend.
     #[error("error sending request: {0}")]
     RequestError(#[from] SendError),
 
     /// An ESI fragment request returned an unexpected HTTP status code.
-    #[error("received unexpected status code for fragment: {0}")]
-    UnexpectedStatus(u16),
+    #[error("received unexpected status code for fragment `{0}`: {1}")]
+    UnexpectedStatus(String, u16),
 }
 
 pub type Result<T> = std::result::Result<T, ExecutionError>;

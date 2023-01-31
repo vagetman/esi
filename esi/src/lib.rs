@@ -75,7 +75,7 @@ mod error;
 mod parse;
 
 use fastly::http::request::PendingRequest;
-use fastly::http::{header, Method, StatusCode};
+use fastly::http::{header, Method, StatusCode, Url};
 use fastly::{mime, Body, Request, Response};
 use log::{debug, error};
 use quick_xml::{Reader, Writer};
@@ -206,7 +206,7 @@ impl Processor {
                         });
 
                         if let Some(element) = send_fragment_request(
-                            req,
+                            req?,
                             alt_req,
                             continue_on_error,
                             dispatch_fragment_request,
@@ -261,23 +261,46 @@ impl Processor {
     }
 }
 
-fn build_fragment_request(mut request: Request, url: &str) -> Request {
-    if url.starts_with('/') {
-        request.get_url_mut().set_path(url);
+fn build_fragment_request(mut request: Request, url: &str) -> Result<Request> {
+    let escaped_url = match quick_xml::escape::unescape(url) {
+        Ok(url) => url,
+        Err(err) => {
+            return Err(ExecutionError::InvalidRequestUrl(err.to_string()));
+        }
+    }
+    .to_string();
+
+    if escaped_url.starts_with('/') {
+        match Url::parse(
+            format!("{}://0.0.0.0{}", request.get_url().scheme(), escaped_url).as_str(),
+        ) {
+            Ok(u) => {
+                request.get_url_mut().set_path(u.path());
+                request.get_url_mut().set_query(u.query());
+            }
+            Err(_err) => {
+                return Err(ExecutionError::InvalidRequestUrl(escaped_url));
+            }
+        };
     } else {
-        request.set_url(url);
+        request.set_url(match Url::parse(&escaped_url) {
+            Ok(url) => url,
+            Err(_err) => {
+                return Err(ExecutionError::InvalidRequestUrl(escaped_url));
+            }
+        });
     }
 
     let hostname = request.get_url().host().expect("no host").to_string();
 
     request.set_header(header::HOST, &hostname);
 
-    request
+    Ok(request)
 }
 
 fn send_fragment_request(
     req: Request,
-    alt: Option<Request>,
+    alt: Option<Result<Request>>,
     continue_on_error: bool,
     dispatch_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
 ) -> Result<Option<Element>> {
@@ -338,7 +361,8 @@ fn poll_elements(
                             if !res.get_status().is_success() {
                                 if let Some(alt) = alt {
                                     debug!("request poll DONE ERROR, trying alt");
-                                    if let Some(pending_request) = dispatch_fragment_request(alt)? {
+                                    if let Some(pending_request) = dispatch_fragment_request(alt?)?
+                                    {
                                         elements.insert(
                                             0,
                                             Element::Fragment(
@@ -358,7 +382,10 @@ fn poll_elements(
                                     continue;
                                 } else {
                                     debug!("request poll DONE ERROR, NO ALT, failing");
-                                    return Err(ExecutionError::UnexpectedStatus(res.get_status().into()));
+                                    return Err(ExecutionError::UnexpectedStatus(
+                                        request.get_url_str().to_string(),
+                                        res.get_status().into(),
+                                    ));
                                 }
                             } else {
                                 // Response status is success, let the guest app process it if needed.

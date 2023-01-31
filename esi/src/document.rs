@@ -1,4 +1,5 @@
 use fastly::{http::request::PendingRequest, Request};
+use crate::Result;
 
 /// A section of the pending response, either raw XML data or a pending fragment request.
 pub enum Element {
@@ -7,7 +8,7 @@ pub enum Element {
         // Metadata of the request
         Request,
         // An optional alternate request to send if the original request fails
-        Option<Request>,
+        Option<Result<Request>>,
         // Whether to continue on error
         bool,
         // The pending request, which can be polled to retrieve the response
