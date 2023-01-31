@@ -1,5 +1,5 @@
-use fastly::{http::request::PendingRequest, Request};
 use crate::Result;
+use fastly::{http::request::PendingRequest, Request};
 
 /// A section of the pending response, either raw XML data or a pending fragment request.
 pub enum Element {
