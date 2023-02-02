@@ -32,10 +32,11 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let processor = esi::Processor::new(Some(req), None, esi::Configuration::default());
+        let processor = esi::Processor::new(Some(req), esi::Configuration::default());
 
         processor.process_response(
             &mut beresp,
+            None,
             Some(&|req| {
                 info!("Sending request {} {}", req.get_method(), req.get_path());
                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))

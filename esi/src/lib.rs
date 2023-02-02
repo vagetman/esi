@@ -33,8 +33,6 @@
 //!         let processor = esi::Processor::new(
 //!             // The original client request.
 //!             Some(req),
-//!             // Optionally provide a template for the client response.
-//!             Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
 //!             // Use the default ESI configuration.
 //!             esi::Configuration::default()
 //!         );
@@ -42,6 +40,8 @@
 //!         processor.process_response(
 //!             // The ESI source document. Note that the body will be consumed.
 //!             &mut beresp,
+//!             // Optionally provide a template for the client response.
+//!             Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
 //!             // Provide logic for sending fragment requests, otherwise the hostname
 //!             // of the request URL will be used as the backend name.
 //!             Some(&|req| {
@@ -93,21 +93,14 @@ pub use crate::error::ExecutionError;
 pub struct Processor {
     // The original client request metadata, if any.
     original_request_metadata: Option<Request>,
-    // The response headers to send to the client.
-    client_response_metadata: Option<Response>,
     // The configuration for the processor.
     configuration: Configuration,
 }
 
 impl Processor {
-    pub fn new(
-        original_request_metadata: Option<Request>,
-        client_response_metadata: Option<Response>,
-        configuration: Configuration,
-    ) -> Self {
+    pub fn new(original_request_metadata: Option<Request>, configuration: Configuration) -> Self {
         Self {
             original_request_metadata,
-            client_response_metadata,
             configuration,
         }
     }
@@ -116,17 +109,14 @@ impl Processor {
     pub fn process_response(
         self,
         src_document: &mut Response,
+        client_response_metadata: Option<Response>,
         dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
         process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
     ) -> Result<()> {
         // Create a response to send the headers to the client
-        let resp = self
-            .client_response_metadata
-            .as_ref()
-            .map(|c| c.clone_without_body())
-            .unwrap_or_else(|| {
-                Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
-            });
+        let resp = client_response_metadata.unwrap_or_else(|| {
+            Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
+        });
 
         // Send the response headers to the client and open an output stream
         let output_writer = resp.stream_to_client();

@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use fastly::{http::StatusCode, mime, Request, Response};
 use log::{error, info};
 use quick_xml::{Reader, Writer};
@@ -27,7 +25,7 @@ fn main() {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let processor = esi::Processor::new(Some(req), None, esi::Configuration::default());
+        let processor = esi::Processor::new(Some(req), esi::Configuration::default());
 
         // Create a response to send the headers to the client
         let resp = Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML);

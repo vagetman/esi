@@ -38,8 +38,6 @@ fn handle_request(req: Request) -> Result<(), Error> {
         let processor = esi::Processor::new(
             // The original client request.
             Some(req),
-            // Optionally provide a template for the client response.
-            Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
             // Use the default ESI configuration.
             esi::Configuration::default()
         );
@@ -47,6 +45,8 @@ fn handle_request(req: Request) -> Result<(), Error> {
         processor.process_response(
             // The ESI source document. Note that the body will be consumed.
             &mut beresp,
+            // Optionally provide a template for the client response.
+            Some(Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)),
             // Provide logic for sending fragment requests, otherwise the hostname
             // of the request URL will be used as the backend name.
             Some(&|req| {
