@@ -2,13 +2,13 @@
 
 A streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
 
-The implementation is currently a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), supporting the following tags:
+The implementation is a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), supporting the following tags:
 
 - `<esi:include>` (+ `alt`, `onerror="continue"`)
 - `<esi:comment>`
 - `<esi:remove>`
 
-Other tags will be ignored.
+Other tags will be ignored and served to the client as-is.
 
 ## Example Usage
 
@@ -74,7 +74,7 @@ fn handle_request(req: Request) -> Result<(), Error> {
 }
 ```
 
-See a full example app in the [`esi_example_app`](./esi_example_app/src/main.rs) subdirectory, or read the hosted documentation at [docs.rs/esi](https://docs.rs/esi).
+See example applications in the [`examples`](./examples) subdirectory or read the hosted documentation at [docs.rs/esi](https://docs.rs/esi). Due to the fact that this processor streams fragments to the client as soon as they are available, it is not possible to return a relevant status code for later errors once we have started streaming the response to the client. For this reason, it is recommended that you refer to the [`esi_example_advanced_error_handling`](./examples/esi_example_advanced_error_handling) application, which allows you to handle errors gracefully by maintaining ownership of the output stream.
 
 ## License
 
