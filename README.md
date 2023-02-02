@@ -64,13 +64,12 @@ fn handle_request(req: Request) -> Result<(), Error> {
                 Ok(resp)
             }),
         )?;
-
-        Ok(())
     } else {
         // Otherwise, we can just return the response.
         beresp.send_to_client();
-        Ok(())
     }
+
+    Ok(())
 }
 ```
 
