@@ -1,8 +1,8 @@
-# esi
+# ESI for Fastly
 
-A streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
+This crate provides a streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
 
-The implementation is a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), supporting the following tags:
+The implementation is a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/) supporting the following tags:
 
 - `<esi:include>` (+ `alt`, `onerror="continue"`)
 - `<esi:comment>`
