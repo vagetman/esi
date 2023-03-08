@@ -22,7 +22,7 @@ pub use crate::error::ExecutionError;
 
 type FragmentRequestDispatcher = dyn Fn(Request) -> Result<Option<PendingRequest>>;
 
-type FragmentResponseProcessor = dyn Fn(Request, Response) -> Result<Response>;
+type FragmentResponseProcessor = dyn Fn(&mut Request, Response) -> Result<Response>;
 
 /// An instance of the ESI processor with a given configuration.
 pub struct Processor {
@@ -271,7 +271,7 @@ fn poll_elements(
                     debug!("writing previously queued other content");
                     output_writer.inner().write_all(&raw).unwrap();
                 }
-                Element::Fragment(request, alt, continue_on_error, pending_request) => {
+                Element::Fragment(mut request, alt, continue_on_error, pending_request) => {
                     match pending_request.poll() {
                         fastly::http::request::PollResult::Pending(pending_request) => {
                             // Request is still pending, re-add it to the front of the queue and wait for the next poll.
@@ -284,6 +284,13 @@ fn poll_elements(
                             break;
                         }
                         fastly::http::request::PollResult::Done(Ok(res)) => {
+                            // Let the app process the response if needed.
+                            let res = if let Some(process_response) = process_fragment_response {
+                                process_response(&mut request, res)?
+                            } else {
+                                res
+                            };
+
                             // Request has completed, check the status code and either continue, fallback to an alt, or fail.
                             if !res.get_status().is_success() {
                                 if let Some(alt) = alt {
@@ -312,15 +319,8 @@ fn poll_elements(
                                     ));
                                 }
                             } else {
-                                // Response status is success, let the guest app process it if needed.
-                                let res = if let Some(process_response) = process_fragment_response
-                                {
-                                    process_response(request, res)?
-                                } else {
-                                    res
-                                };
-
-                                // Write the response body to the output stream.
+                                // Response status is success,
+                                // write the response body to the output stream.
                                 output_writer
                                     .inner()
                                     .write_all(&res.into_body_bytes())

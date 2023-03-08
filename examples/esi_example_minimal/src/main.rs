@@ -41,12 +41,16 @@ fn handle_request(req: Request) -> Result<(), Error> {
                 info!("Sending request {} {}", req.get_method(), req.get_path());
                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))
             }),
-            Some(&|req, resp| {
+            Some(&|req, mut resp| {
                 info!(
                     "Received response for {} {}",
                     req.get_method(),
                     req.get_path()
                 );
+                if !resp.get_status().is_success() {
+                    // Override status so we still insert errors.
+                    resp.set_status(StatusCode::OK);
+                }
                 Ok(resp)
             }),
         )?;
