@@ -20,6 +20,10 @@ pub use crate::parse::{parse_tags, Event, Tag};
 pub use crate::config::Configuration;
 pub use crate::error::ExecutionError;
 
+type FragmentRequestDispatcher = dyn Fn(Request) -> Result<Option<PendingRequest>>;
+
+type FragmentResponseProcessor = dyn Fn(Request, Response) -> Result<Response>;
+
 /// An instance of the ESI processor with a given configuration.
 pub struct Processor {
     // The original client request metadata, if any.
@@ -41,8 +45,8 @@ impl Processor {
         self,
         src_document: &mut Response,
         client_response_metadata: Option<Response>,
-        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
-        process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
+        dispatch_fragment_request: Option<&FragmentRequestDispatcher>,
+        process_fragment_response: Option<&FragmentResponseProcessor>,
     ) -> Result<()> {
         // Create a response to send the headers to the client
         let resp = client_response_metadata.unwrap_or_else(|| {
@@ -77,8 +81,8 @@ impl Processor {
         self,
         mut src_document: Reader<impl BufRead>,
         output_writer: &mut Writer<impl Write>,
-        dispatch_fragment_request: Option<&dyn Fn(Request) -> Result<Option<PendingRequest>>>,
-        process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
+        dispatch_fragment_request: Option<&FragmentRequestDispatcher>,
+        process_fragment_response: Option<&FragmentResponseProcessor>,
     ) -> Result<()> {
         let dispatch_fragment_request = dispatch_fragment_request.unwrap_or({
             &|req| {
@@ -223,7 +227,7 @@ fn send_fragment_request(
     req: Request,
     alt: Option<Result<Request>>,
     continue_on_error: bool,
-    dispatch_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
+    dispatch_request: &FragmentRequestDispatcher,
 ) -> Result<Option<Element>> {
     debug!("Requesting ESI fragment: {}", req.get_url());
 
@@ -255,8 +259,8 @@ fn send_fragment_request(
 fn poll_elements(
     elements: &mut VecDeque<Element>,
     output_writer: &mut Writer<impl Write>,
-    dispatch_fragment_request: &dyn Fn(Request) -> Result<Option<PendingRequest>>,
-    process_fragment_response: Option<&dyn Fn(Request, Response) -> Result<Response>>,
+    dispatch_fragment_request: &FragmentRequestDispatcher,
+    process_fragment_response: Option<&FragmentResponseProcessor>,
 ) -> Result<()> {
     loop {
         let element = elements.pop_front();
@@ -271,10 +275,12 @@ fn poll_elements(
                     match pending_request.poll() {
                         fastly::http::request::PollResult::Pending(pending_request) => {
                             // Request is still pending, re-add it to the front of the queue and wait for the next poll.
-                            elements.insert(
-                                0,
-                                Element::Fragment(request, alt, continue_on_error, pending_request),
-                            );
+                            elements.push_front(Element::Fragment(
+                                request,
+                                alt,
+                                continue_on_error,
+                                pending_request,
+                            ));
                             break;
                         }
                         fastly::http::request::PollResult::Done(Ok(res)) => {
@@ -284,15 +290,12 @@ fn poll_elements(
                                     debug!("request poll DONE ERROR, trying alt");
                                     if let Some(pending_request) = dispatch_fragment_request(alt?)?
                                     {
-                                        elements.insert(
-                                            0,
-                                            Element::Fragment(
-                                                request,
-                                                None,
-                                                continue_on_error,
-                                                pending_request,
-                                            ),
-                                        );
+                                        elements.push_front(Element::Fragment(
+                                            request,
+                                            None,
+                                            continue_on_error,
+                                            pending_request,
+                                        ));
                                         break;
                                     } else {
                                         debug!("guest returned None, continuing");
