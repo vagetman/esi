@@ -1,5 +1,5 @@
-use esi::Processor;
 use fastly::{http::StatusCode, mime, Error, Request, Response};
+use log::info;
 
 fn main() {
     env_logger::builder()
@@ -23,7 +23,8 @@ fn handle_request(req: Request) -> Result<(), Error> {
 
     // Generate synthetic test response from "index.html" file.
     // You probably want replace this with a backend call, e.g. `req.clone_without_body().send("origin_0")`
-    let beresp = Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
+    let mut beresp =
+        Response::from_body(include_str!("index.html")).with_content_type(mime::TEXT_HTML);
 
     // If the response is HTML, we can parse it for ESI tags.
     if beresp
@@ -31,16 +32,32 @@ fn handle_request(req: Request) -> Result<(), Error> {
         .map(|c| c.subtype() == mime::HTML)
         .unwrap_or(false)
     {
-        let config = esi::Configuration::default().with_recursion();
+        let processor = esi::Processor::new(Some(req), esi::Configuration::default());
 
-        let processor = Processor::new(config);
-
-        processor.execute_esi(req, beresp, &|req| Ok(req.with_ttl(120).send("mock-s3")?))?;
-
-        Ok(())
+        processor.process_response(
+            &mut beresp,
+            None,
+            Some(&|req| {
+                info!("Sending request {} {}", req.get_method(), req.get_path());
+                Ok(Some(req.with_ttl(120).send_async("mock-s3")?))
+            }),
+            Some(&|req, mut resp| {
+                info!(
+                    "Received response for {} {}",
+                    req.get_method(),
+                    req.get_path()
+                );
+                if !resp.get_status().is_success() {
+                    // Override status so we still insert errors.
+                    resp.set_status(StatusCode::OK);
+                }
+                Ok(resp)
+            }),
+        )?;
     } else {
         // Otherwise, we can just return the response.
         beresp.send_to_client();
-        Ok(())
     }
+
+    Ok(())
 }

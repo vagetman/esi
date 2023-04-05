@@ -43,7 +43,7 @@ where
     let mut buffer = Vec::new();
     // Parse tags and build events vec
     loop {
-        match reader.read_event(&mut buffer) {
+        match reader.read_event_into(&mut buffer) {
             // Handle <esi:remove> tags
             Ok(quick_xml::events::Event::Start(elem)) if elem.starts_with(&esi_remove) => {
                 remove = true;
@@ -60,16 +60,22 @@ where
             _ if remove => continue,
 
             // Handle <esi:include> tags, and ignore the contents if they are not self-closing
-            Ok(quick_xml::events::Event::Empty(elem)) if elem.name().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::Empty(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 callback(parse_include(&elem)?)?;
             }
 
-            Ok(quick_xml::events::Event::Start(elem)) if elem.name().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::Start(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 open_include = true;
                 callback(parse_include(&elem)?)?;
             }
 
-            Ok(quick_xml::events::Event::End(elem)) if elem.name().starts_with(&esi_include) => {
+            Ok(quick_xml::events::Event::End(elem))
+                if elem.name().into_inner().starts_with(&esi_include) =>
+            {
                 if !open_include {
                     return Err(ExecutionError::UnexpectedClosingTag(
                         String::from_utf8(elem.to_vec()).unwrap(),
@@ -82,7 +88,9 @@ where
             _ if open_include => continue,
 
             // Ignore <esi:comment> tags
-            Ok(quick_xml::events::Event::Empty(elem)) if elem.name().starts_with(&esi_comment) => {
+            Ok(quick_xml::events::Event::Empty(elem))
+                if elem.name().into_inner().starts_with(&esi_comment) =>
+            {
                 continue
             }
 
@@ -99,11 +107,15 @@ where
 }
 
 fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
-    let src = match elem.attributes().flatten().find(|attr| attr.key == b"src") {
+    let src = match elem
+        .attributes()
+        .flatten()
+        .find(|attr| attr.key.into_inner() == b"src")
+    {
         Some(attr) => String::from_utf8(attr.value.to_vec()).unwrap(),
         None => {
             return Err(ExecutionError::MissingRequiredParameter(
-                String::from_utf8(elem.name().to_vec()).unwrap(),
+                String::from_utf8(elem.name().into_inner().to_vec()).unwrap(),
                 "src".to_string(),
             ));
         }
@@ -112,13 +124,13 @@ fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
     let alt = elem
         .attributes()
         .flatten()
-        .find(|attr| attr.key == b"alt")
+        .find(|attr| attr.key.into_inner() == b"alt")
         .map(|attr| String::from_utf8(attr.value.to_vec()).unwrap());
 
     let continue_on_error = elem
         .attributes()
         .flatten()
-        .find(|attr| attr.key == b"onerror")
+        .find(|attr| attr.key.into_inner() == b"onerror")
         .map(|attr| &attr.value.to_vec() == b"continue")
         == Some(true);
 

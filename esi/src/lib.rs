@@ -1,232 +1,351 @@
-//! # ESI for Fastly
-//!
-//! This crate provides a streaming Edge Side Includes parser and executor designed for Fastly Compute@Edge.
-//!
-//! The implementation is currently a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/), so
-//! only the `esi:include` tag is supported. Other tags will be ignored.
-//!
-//! ## Usage Example
-//!
-//! ```rust,no_run
-//! use esi::Processor;
-//! use fastly::{http::StatusCode, mime, Error, Request, Response};
-//!
-//! fn main() {
-//!     if let Err(err) = handle_request(Request::from_client()) {
-//!         println!("returning error response");
-//!
-//!         Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
-//!             .with_body(err.to_string())
-//!             .send_to_client();
-//!     }
-//! }
-//!
-//! fn handle_request(req: Request) -> Result<(), Error> {
-//!     // Fetch ESI document from backend.
-//!     let beresp = req.clone_without_body().send("origin_0")?;
-//!
-//!     // Construct an ESI processor with the default configuration.
-//!     let config = esi::Configuration::default();
-//!     let processor = Processor::new(config);
-//!
-//!     // Execute the ESI document using the client request as context
-//!     // and sending all requests to the backend `origin_1`.
-//!     processor.execute_esi(req, beresp, &|req| {
-//!         Ok(req.with_ttl(120).send("origin_1")?)
-//!     })?;
-//!
-//!     Ok(())
-//! }
-//! ```
+#![doc = include_str!("../../README.md")]
 
 mod config;
+mod document;
 mod error;
 mod parse;
 
-use fastly::http::body::StreamingBody;
-use fastly::http::header;
-use fastly::{Body, Request, Response};
-use log::{debug, error, warn};
+use fastly::http::request::PendingRequest;
+use fastly::http::{header, Method, StatusCode, Url};
+use fastly::{mime, Body, Request, Response};
+use log::{debug, error};
 use quick_xml::{Reader, Writer};
-use std::io::Write;
+use std::collections::VecDeque;
+use std::io::{BufRead, Write};
 
-use crate::error::Result;
+pub use crate::document::Element;
+pub use crate::error::Result;
 pub use crate::parse::{parse_tags, Event, Tag};
 
 pub use crate::config::Configuration;
 pub use crate::error::ExecutionError;
 
+type FragmentRequestDispatcher = dyn Fn(Request) -> Result<Option<PendingRequest>>;
+
+type FragmentResponseProcessor = dyn Fn(&mut Request, Response) -> Result<Response>;
+
 /// An instance of the ESI processor with a given configuration.
-#[derive(Default)]
 pub struct Processor {
+    // The original client request metadata, if any.
+    original_request_metadata: Option<Request>,
+    // The configuration for the processor.
     configuration: Configuration,
 }
 
 impl Processor {
-    /// Construct a new ESI processor with the given configuration.
-    pub fn new(configuration: Configuration) -> Self {
-        Self { configuration }
+    pub fn new(original_request_metadata: Option<Request>, configuration: Configuration) -> Self {
+        Self {
+            original_request_metadata,
+            configuration,
+        }
     }
-}
 
-impl Processor {
-    /// Execute the ESI document (`document`) using the provided client request (`original_request`) as context,
-    /// and stream the resulting output to the client.
-    ///
-    /// The `request_handler` parameter is a closure that is called for each ESI fragment request.
-    pub fn execute_esi(
-        &self,
-        original_request: Request,
-        mut document: Response,
-        request_handler: &dyn Fn(Request) -> Result<Response>,
+    /// Process a response body as an ESI document. Consumes the response body.
+    pub fn process_response(
+        self,
+        src_document: &mut Response,
+        client_response_metadata: Option<Response>,
+        dispatch_fragment_request: Option<&FragmentRequestDispatcher>,
+        process_fragment_response: Option<&FragmentResponseProcessor>,
     ) -> Result<()> {
-        // Create a parser for the ESI document
-        let body = document.take_body();
-        let xml_reader = reader_from_body(body);
+        // Create a response to send the headers to the client
+        let resp = client_response_metadata.unwrap_or_else(|| {
+            Response::from_status(StatusCode::OK).with_content_type(mime::TEXT_HTML)
+        });
 
         // Send the response headers to the client and open an output stream
-        let output = document.stream_to_client();
+        let output_writer = resp.stream_to_client();
 
         // Set up an XML writer to write directly to the client output stream.
-        let mut xml_writer = Writer::new(output);
+        let mut xml_writer = Writer::new(output_writer);
 
-        // Parse the ESI document and stream it to the XML writer.
-        match self.execute_esi_fragment(
-            original_request,
-            xml_reader,
+        match self.process_document(
+            reader_from_body(src_document.take_body()),
             &mut xml_writer,
-            request_handler,
+            dispatch_fragment_request,
+            process_fragment_response,
         ) {
-            Ok(_) => Ok(()),
+            Ok(()) => {
+                xml_writer.into_inner().finish().unwrap();
+                Ok(())
+            }
             Err(err) => {
-                error!("error executing ESI: {:?}", err);
-                xml_writer.write(b"\nAn error occurred while constructing this document.\n")?;
-                xml_writer
-                    .inner()
-                    .flush()
-                    .expect("failed to flush error message");
+                error!("error processing ESI document: {}", err);
                 Err(err)
             }
         }
     }
 
-    /// Execute the ESI fragment (`fragment`) using the provided client request (`original_request`) as context.
-    ///
-    /// Rather than sending the result of the execution to the client, this function will write XML tags directly
-    /// to the given `xml_writer`, allowing for nesting.
-    pub fn execute_esi_fragment(
-        &self,
-        original_request: Request,
-        mut xml_reader: Reader<Body>,
-        xml_writer: &mut Writer<StreamingBody>,
-        request_handler: &dyn Fn(Request) -> Result<Response>,
+    /// Process an ESI document from a [`quick_xml::Reader`].
+    pub fn process_document(
+        self,
+        mut src_document: Reader<impl BufRead>,
+        output_writer: &mut Writer<impl Write>,
+        dispatch_fragment_request: Option<&FragmentRequestDispatcher>,
+        process_fragment_response: Option<&FragmentResponseProcessor>,
     ) -> Result<()> {
-        // Parse the ESI fragment
+        let dispatch_fragment_request = dispatch_fragment_request.unwrap_or({
+            &|req| {
+                debug!("no dispatch method configured, defaulting to hostname");
+                let backend = req
+                    .get_url()
+                    .host()
+                    .unwrap_or_else(|| panic!("no host in request: {}", req.get_url()))
+                    .to_string();
+                let pending_req = req.send_async(backend)?;
+                Ok(Some(pending_req))
+            }
+        });
+
+        // Set up the queue of document elements to be sent to the client.
+        let mut elements: VecDeque<Element> = VecDeque::new();
+
+        // If there is a source request to mimic, copy its metadata, otherwise use a default request.
+        let original_request_metadata = if let Some(req) = &self.original_request_metadata {
+            req.clone_without_body()
+        } else {
+            Request::new(Method::GET, "http://localhost")
+        };
+
+        // Begin parsing the source document
         parse_tags(
             &self.configuration.namespace,
-            &mut xml_reader,
+            &mut src_document,
             &mut |event| {
+                debug!("got {:?}", event);
                 match event {
                     Event::ESI(Tag::Include {
                         src,
                         alt,
                         continue_on_error,
                     }) => {
-                        let resp = match self.send_esi_fragment_request(
-                            &original_request,
+                        let req = build_fragment_request(
+                            original_request_metadata.clone_without_body(),
                             &src,
-                            request_handler,
-                        ) {
-                            Ok(resp) => Some(resp),
-                            Err(err) => {
-                                warn!("Request to {} failed: {:?}", src, err);
-                                if let Some(alt) = alt {
-                                    warn!("Trying `alt` instead: {}", alt);
-                                    match self.send_esi_fragment_request(
-                                        &original_request,
-                                        &alt,
-                                        request_handler,
-                                    ) {
-                                        Ok(resp) => Some(resp),
-                                        Err(err) => {
-                                            debug!("Alt request to {} failed: {:?}", alt, err);
-                                            if continue_on_error {
-                                                None
-                                            } else {
-                                                return Err(err);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    error!("Fragment request failed with no `alt` available");
-                                    if continue_on_error {
-                                        None
-                                    } else {
-                                        return Err(err);
-                                    }
-                                }
-                            }
-                        };
+                        );
+                        let alt_req = alt.map(|alt| {
+                            build_fragment_request(
+                                original_request_metadata.clone_without_body(),
+                                &alt,
+                            )
+                        });
 
-                        if let Some(mut resp) = resp {
-                            if self.configuration.recursive {
-                                let fragment_xml_reader = reader_from_body(resp.take_body());
-                                self.execute_esi_fragment(
-                                    original_request.clone_without_body(),
-                                    fragment_xml_reader,
-                                    xml_writer,
-                                    request_handler,
-                                )?;
-                            } else if let Err(err) =
-                                xml_writer.inner().write_all(&resp.take_body().into_bytes())
-                            {
-                                error!("Failed to write fragment body: {}", err);
-                            }
-                        } else {
-                            error!("No content for fragment");
+                        if let Some(element) = send_fragment_request(
+                            req?,
+                            alt_req,
+                            continue_on_error,
+                            dispatch_fragment_request,
+                        )? {
+                            elements.push_back(element);
                         }
                     }
                     Event::XML(event) => {
-                        xml_writer.write_event(event)?;
-                        xml_writer.inner().flush().expect("failed to flush output");
+                        if elements.is_empty() {
+                            debug!("nothing waiting so streaming directly to client");
+                            output_writer.write_event(event)?;
+                            output_writer
+                                .inner()
+                                .flush()
+                                .expect("failed to flush output");
+                        } else {
+                            debug!("pushing content to buffer, len: {}", elements.len());
+                            let mut vec = Vec::new();
+                            let mut writer = Writer::new(&mut vec);
+                            writer.write_event(event)?;
+                            elements.push_back(Element::Raw(vec));
+                        }
                     }
                 }
+
+                poll_elements(
+                    &mut elements,
+                    output_writer,
+                    dispatch_fragment_request,
+                    process_fragment_response,
+                )?;
+
                 Ok(())
             },
         )?;
 
+        // Wait for any pending requests to complete
+        loop {
+            if elements.is_empty() {
+                break;
+            }
+
+            poll_elements(
+                &mut elements,
+                output_writer,
+                dispatch_fragment_request,
+                process_fragment_response,
+            )?;
+        }
+
         Ok(())
-    }
-
-    fn send_esi_fragment_request(
-        &self,
-        original_request: &Request,
-        url: &str,
-        request_handler: &dyn Fn(Request) -> Result<Response>,
-    ) -> Result<Response> {
-        let mut req = original_request.clone_without_body();
-
-        if url.starts_with('/') {
-            req.get_url_mut().set_path(url);
-        } else {
-            req.set_url(url);
-        }
-
-        let hostname = req.get_url().host().expect("no host").to_string();
-
-        req.set_header(header::HOST, &hostname);
-
-        debug!("Requesting ESI fragment: {}", url);
-
-        let resp = request_handler(req)?;
-        if resp.get_status().is_success() {
-            Ok(resp)
-        } else {
-            Err(ExecutionError::UnexpectedStatus(resp.get_status().as_u16()))
-        }
     }
 }
 
+fn build_fragment_request(mut request: Request, url: &str) -> Result<Request> {
+    let escaped_url = match quick_xml::escape::unescape(url) {
+        Ok(url) => url,
+        Err(err) => {
+            return Err(ExecutionError::InvalidRequestUrl(err.to_string()));
+        }
+    }
+    .to_string();
+
+    if escaped_url.starts_with('/') {
+        match Url::parse(
+            format!("{}://0.0.0.0{}", request.get_url().scheme(), escaped_url).as_str(),
+        ) {
+            Ok(u) => {
+                request.get_url_mut().set_path(u.path());
+                request.get_url_mut().set_query(u.query());
+            }
+            Err(_err) => {
+                return Err(ExecutionError::InvalidRequestUrl(escaped_url));
+            }
+        };
+    } else {
+        request.set_url(match Url::parse(&escaped_url) {
+            Ok(url) => url,
+            Err(_err) => {
+                return Err(ExecutionError::InvalidRequestUrl(escaped_url));
+            }
+        });
+    }
+
+    let hostname = request.get_url().host().expect("no host").to_string();
+
+    request.set_header(header::HOST, &hostname);
+
+    Ok(request)
+}
+
+fn send_fragment_request(
+    req: Request,
+    alt: Option<Result<Request>>,
+    continue_on_error: bool,
+    dispatch_request: &FragmentRequestDispatcher,
+) -> Result<Option<Element>> {
+    debug!("Requesting ESI fragment: {}", req.get_url());
+
+    let req_metadata = req.clone_without_body();
+
+    let pending_request = match dispatch_request(req) {
+        Ok(Some(req)) => req,
+        Ok(None) => {
+            debug!("No pending request returned, skipping");
+            return Ok(None);
+        }
+        Err(err) => {
+            error!("Failed to dispatch request: {:?}", err);
+            return Err(err);
+        }
+    };
+
+    Ok(Some(Element::Fragment(
+        req_metadata,
+        alt,
+        continue_on_error,
+        pending_request,
+    )))
+}
+
+// This function is responsible for polling pending requests and writing their
+// responses to the client output stream. It also handles any queued source
+// content that needs to be written to the client output stream.
+fn poll_elements(
+    elements: &mut VecDeque<Element>,
+    output_writer: &mut Writer<impl Write>,
+    dispatch_fragment_request: &FragmentRequestDispatcher,
+    process_fragment_response: Option<&FragmentResponseProcessor>,
+) -> Result<()> {
+    loop {
+        let element = elements.pop_front();
+
+        if let Some(element) = element {
+            match element {
+                Element::Raw(raw) => {
+                    debug!("writing previously queued other content");
+                    output_writer.inner().write_all(&raw).unwrap();
+                }
+                Element::Fragment(mut request, alt, continue_on_error, pending_request) => {
+                    match pending_request.poll() {
+                        fastly::http::request::PollResult::Pending(pending_request) => {
+                            // Request is still pending, re-add it to the front of the queue and wait for the next poll.
+                            elements.push_front(Element::Fragment(
+                                request,
+                                alt,
+                                continue_on_error,
+                                pending_request,
+                            ));
+                            break;
+                        }
+                        fastly::http::request::PollResult::Done(Ok(res)) => {
+                            // Let the app process the response if needed.
+                            let res = if let Some(process_response) = process_fragment_response {
+                                process_response(&mut request, res)?
+                            } else {
+                                res
+                            };
+
+                            // Request has completed, check the status code and either continue, fallback to an alt, or fail.
+                            if !res.get_status().is_success() {
+                                if let Some(alt) = alt {
+                                    debug!("request poll DONE ERROR, trying alt");
+                                    if let Some(pending_request) = dispatch_fragment_request(alt?)?
+                                    {
+                                        elements.push_front(Element::Fragment(
+                                            request,
+                                            None,
+                                            continue_on_error,
+                                            pending_request,
+                                        ));
+                                        break;
+                                    } else {
+                                        debug!("guest returned None, continuing");
+                                        continue;
+                                    }
+                                } else if continue_on_error {
+                                    debug!("request poll DONE ERROR, NO ALT, continuing");
+                                    continue;
+                                } else {
+                                    debug!("request poll DONE ERROR, NO ALT, failing");
+                                    return Err(ExecutionError::UnexpectedStatus(
+                                        request.get_url_str().to_string(),
+                                        res.get_status().into(),
+                                    ));
+                                }
+                            } else {
+                                // Response status is success,
+                                // write the response body to the output stream.
+                                output_writer
+                                    .inner()
+                                    .write_all(&res.into_body_bytes())
+                                    .unwrap();
+                                output_writer
+                                    .inner()
+                                    .flush()
+                                    .expect("failed to flush output");
+                            }
+                        }
+                        fastly::http::request::PollResult::Done(Err(err)) => {
+                            return Err(ExecutionError::RequestError(err))
+                        }
+                    }
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+// Helper function to create an XML reader from a body.
 fn reader_from_body(body: Body) -> Reader<Body> {
     let mut reader = Reader::from_reader(body);
 
