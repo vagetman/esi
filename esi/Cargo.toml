@@ -6,7 +6,7 @@ repository = "https://github.com/fastly/esi"
 license = "MIT"
 authors = ["Kailan Blanks <kblanks@fastly.com>"]
 edition = "2018"
-readme = "../README.md"
+readme = "./README.md"
 
 [dependencies]
 quick-xml = "0.27.1"
