@@ -9,6 +9,6 @@
     </div>
   </header>
   <div style="margin: auto; max-width: 1400px; padding: 6px 20px;">
-    An error occurred while trying to serve this document. If you are the owner of this site, please check the Compute@Edge logs for more information.
+    An error occurred while trying to serve this document. If you are the owner of this site, please check the Compute logs for more information.
   </div>
 </div>
