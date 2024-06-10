@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>Sample website for ESI</title>
+</head>
+
+<body>
+  <!--
+        The include below should fail on the src, and serve the alt instead.
+    -->
+  <esi:include src="/templates/header-missing.html" alt="/templates/header.php" />
+
+  <contents>
+    <div>
+      <esi:try>
+        <esi:attempt>
+          <esi:include src="/templates/fail1.html" />
+          This include (1) should fail, and thus this text won't be in the resulting stream.
+        </esi:attempt>
+        <esi:except>
+          This exception handler (1) should end up in the resulting stream.
+        </esi:except>
+      </esi:try>
+    </div>
+
+    <div>
+      <esi:try>
+        <esi:attempt>
+          <esi:include src="/templates/fail3.html" onerror="continue" />
+          The onerror="continue" will swallow the error here.
+          This text (2) will appear in the resulting stream.
+        </esi:attempt>
+        <esi:except>
+          This exception handler (2) won't end up in the resulting stream.
+        </esi:except>
+      </esi:try>
+    </div>
+
+    <div>
+      <esi:try>
+        <esi:attempt>
+
+          <div>
+            esi:try can be nested.
+          </div>
+
+          <esi:try>
+            <esi:attempt>
+              <esi:include src="/templates/fail4.html" />
+              This include should fail, and thus this text (3a) won't be in the resulting stream.
+            </esi:attempt>
+            <esi:except>
+              This exception handler (3a) will end up in the resulting stream.
+            </esi:except>
+          </esi:try>
+
+        </esi:attempt>
+        <esi:except>
+          This exception handler (3b) won't end up in the resulting stream.
+        </esi:except>
+      </esi:try>
+    </div>
+  </contents>
+
+  <!--
+        The include below should fail for both the src and alt, but the failure should be silent
+        due to the onerror="continue"
+    -->
+  <esi:include src="/templates/footer-missing.html" alt="/templates/footer-missing-2.html" onerror="continue" />
+  <esi:include src="/templates/footer.html" />
+
+  <!--
+        Below is how comments can be added.
+    -->
+  <esi:comment text="This is a comment and should not be in the resulting stream" />
+  <esi:remove>
+    This text should not end up in the resulting stream either.
+  </esi:remove>
+  <!--esi
+    <div>
+        This is inside an ESI comment. The processor should remove the opening and closing ESI comment tags,
+        and as a result, this text should be in the resulting stream.
+    </div>
+    -->
+</body>
+
+</html>

@@ -1,8 +1,8 @@
 use std::io::Write;
 
+use esi::{Reader, Writer};
 use fastly::{http::StatusCode, mime, Request, Response};
 use log::{error, info};
-use quick_xml::{Reader, Writer};
 
 fn main() {
     env_logger::builder()
@@ -24,8 +24,7 @@ fn main() {
     // If the response is HTML, we can parse it for ESI tags.
     if beresp
         .get_content_type()
-        .map(|c| c.subtype() == mime::HTML)
-        .unwrap_or(false)
+        .is_some_and(|c| c.subtype() == mime::HTML)
     {
         let processor = esi::Processor::new(Some(req), esi::Configuration::default());
 
@@ -62,10 +61,9 @@ fn main() {
             }
             Err(err) => {
                 error!("error processing ESI document: {}", err);
-                xml_writer
+                let _ = xml_writer
                     .get_mut()
-                    .write_all(include_bytes!("error.html.fragment"))
-                    .expect("failed to write error response");
+                    .write(include_bytes!("error.html.fragment"));
                 xml_writer.into_inner().finish().unwrap_or_else(|_| {
                     error!("error flushing error response to client");
                 });

@@ -3,7 +3,8 @@
 members = [
     "esi",
     "examples/esi_example_minimal",
-    "examples/esi_example_advanced_error_handling"
+    "examples/esi_example_advanced_error_handling",
+    "examples/esi_try_example",
 ]
 
 [workspace.package]
