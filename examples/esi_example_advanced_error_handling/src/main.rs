@@ -22,8 +22,7 @@ fn main() {
     // If the response is HTML, we can parse it for ESI tags.
     if beresp
         .get_content_type()
-        .map(|c| c.subtype() == mime::HTML)
-        .unwrap_or(false)
+        .is_some_and(|c| c.subtype() == mime::HTML)
     {
         let processor = esi::Processor::new(Some(req), esi::Configuration::default());
 

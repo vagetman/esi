@@ -103,11 +103,10 @@ impl Processor {
         let mut elements: VecDeque<Element> = VecDeque::new();
 
         // If there is a source request to mimic, copy its metadata, otherwise use a default request.
-        let original_request_metadata = if let Some(req) = &self.original_request_metadata {
-            req.clone_without_body()
-        } else {
-            Request::new(Method::GET, "http://localhost")
-        };
+        let original_request_metadata = self.original_request_metadata.as_ref().map_or_else(
+            || Request::new(Method::GET, "http://localhost"),
+            Request::clone_without_body,
+        );
 
         // Begin parsing the source document
         parse_tags(
@@ -155,7 +154,7 @@ impl Processor {
                             {
                                 let req = build_fragment_request(
                                     original_request_metadata.clone_without_body(),
-                                    &src,
+                                    src,
                                 );
                                 let alt_req = alt.clone().map(|alt| {
                                     build_fragment_request(
@@ -200,7 +199,7 @@ impl Processor {
                             {
                                 let req = build_fragment_request(
                                     original_request_metadata.clone_without_body(),
-                                    &src,
+                                    src,
                                 );
                                 let alt_req = alt.clone().map(|alt| {
                                     build_fragment_request(
@@ -361,6 +360,7 @@ fn send_fragment_request(
 // This function is responsible for polling pending requests and writing their
 // responses to the client output stream. It also handles any queued source
 // content that needs to be written to the client output stream.
+#[allow(clippy::cognitive_complexity)]
 fn poll_elements(
     elements: &mut VecDeque<Element>,
     output_writer: &mut Writer<impl Write>,
@@ -580,7 +580,7 @@ fn poll_elements(
                                             except_tasks.include.push_front(Fragment {
                                                 request,
                                                 alt: None,
-                                                continue_on_error: continue_on_error,
+                                                continue_on_error,
                                                 pending_request,
                                             });
 
@@ -641,7 +641,7 @@ fn reader_from_body(body: Body) -> Reader<Body> {
 }
 // helper function to drive output to a response stream
 fn output_handler(output_writer: &mut Writer<impl Write>, buffer: &[u8]) {
-    output_writer.inner().write_all(&buffer).unwrap();
+    output_writer.inner().write_all(buffer).unwrap();
     output_writer
         .inner()
         .flush()

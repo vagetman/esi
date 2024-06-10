@@ -43,12 +43,12 @@ pub enum Element {
 impl std::fmt::Debug for Element {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Element::Raw(_) => write!(f, "Raw"),
-            Element::Include(Fragment { alt: Some(_), .. }) => {
+            Self::Raw(_) => write!(f, "Raw"),
+            Self::Include(Fragment { alt: Some(_), .. }) => {
                 write!(f, "Incldude Fragment(with alt)")
             }
-            Element::Include(Fragment { .. }) => write!(f, "Include Fragment"),
-            Element::Try { .. } => write!(f, "Try"),
+            Self::Include(Fragment { .. }) => write!(f, "Include Fragment"),
+            Self::Try { .. } => write!(f, "Try"),
         }
     }
 }
