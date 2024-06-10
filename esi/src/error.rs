@@ -14,6 +14,10 @@ pub enum ExecutionError {
     #[error("tag `{0}` is missing required parameter `{1}`")]
     MissingRequiredParameter(String, String),
 
+    /// The ESI document contains an opening tag where it doesn't belong.
+    #[error("unexpected `{0}` opening tag")]
+    UnexpectedOpeningTag(String),
+
     /// The ESI document contains an opening tag without a matching closing tag.
     #[error("unexpected `{0}` closing tag")]
     UnexpectedClosingTag(String),
