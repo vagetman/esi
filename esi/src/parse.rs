@@ -13,12 +13,6 @@ pub struct Include {
     pub continue_on_error: bool,
 }
 
-// #[derive(Debug)]
-// pub struct Task {
-//     include: Include,
-//     text: String,
-// }
-
 #[derive(Debug)]
 pub enum Tag<'a> {
     Include {
@@ -27,8 +21,8 @@ pub enum Tag<'a> {
         continue_on_error: bool,
     },
     Try {
-        attempts: Vec<Event<'a>>,
-        excepts: Vec<Event<'a>>,
+        attempt_events: Vec<Event<'a>>,
+        except_events: Vec<Event<'a>>,
     },
 }
 
@@ -132,8 +126,6 @@ where
 }
 
 fn parse_include<'a>(elem: &BytesStart) -> Result<Tag<'a>> {
-    // let (src, alt, continue_on_error) = parse_include_attributes();
-
     let src = match elem
         .attributes()
         .flatten()
@@ -187,8 +179,8 @@ where
     let mut inside_tag: Option<TryNestedTag> = None;
 
     let mut buf = Vec::new();
-    let mut attempt_tasks = Vec::new();
-    let mut except_tasks = Vec::new();
+    let mut attempt_events = Vec::new();
+    let mut except_events = Vec::new();
     let mut attempt_found = false;
     let mut except_found = false;
     let mut open_include = false;
@@ -217,8 +209,8 @@ where
             Ok(XmlEvent::Start(elem)) if elem.name().into_inner().starts_with(esi_include) => {
                 let tag = parse_include(&elem)?;
                 match inside_tag {
-                    Some(TryNestedTag::Attempt) => attempt_tasks.push(Event::ESI(tag)),
-                    Some(TryNestedTag::Except) => except_tasks.push(Event::ESI(tag)),
+                    Some(TryNestedTag::Attempt) => attempt_events.push(Event::ESI(tag)),
+                    Some(TryNestedTag::Except) => except_events.push(Event::ESI(tag)),
                     _ => (),
                 }
                 open_include = true;
@@ -227,8 +219,8 @@ where
             Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(esi_include) => {
                 let tag = parse_include(&elem)?;
                 match inside_tag {
-                    Some(TryNestedTag::Attempt) => attempt_tasks.push(Event::ESI(tag)),
-                    Some(TryNestedTag::Except) => except_tasks.push(Event::ESI(tag)),
+                    Some(TryNestedTag::Attempt) => attempt_events.push(Event::ESI(tag)),
+                    Some(TryNestedTag::Except) => except_events.push(Event::ESI(tag)),
                     _ => (),
                 }
             }
@@ -255,8 +247,8 @@ where
                     ));
                 }
                 callback(Event::ESI(Tag::Try {
-                    attempts: attempt_tasks,
-                    excepts: except_tasks,
+                    attempt_events,
+                    except_events,
                 }))?;
                 break;
             }
@@ -268,19 +260,19 @@ where
                 }
                 match inside_tag {
                     Some(TryNestedTag::Attempt) => {
-                        attempt_tasks.push(Event::XML(XmlEvent::Text(txt.into_owned())));
+                        attempt_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
                     }
                     Some(TryNestedTag::Except) => {
-                        except_tasks.push(Event::XML(XmlEvent::Text(txt.into_owned())));
+                        except_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
                     }
                     _ => (),
                 }
             }
             Ok(event) if inside_tag == Some(TryNestedTag::Attempt) => {
-                attempt_tasks.push(Event::XML(event.into_owned()));
+                attempt_events.push(Event::XML(event.into_owned()));
             }
             Ok(event) if inside_tag == Some(TryNestedTag::Except) => {
-                except_tasks.push(Event::XML(event.into_owned()));
+                except_events.push(Event::XML(event.into_owned()));
             }
             Ok(event) => {
                 callback(Event::XML(event.into_owned()))?;

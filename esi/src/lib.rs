@@ -140,101 +140,24 @@ impl Processor {
                             elements.push_back(Element::Include(fragment));
                         }
                     }
-                    Event::ESI(Tag::Try { attempts, excepts }) => {
-                        // TODO: this will only support `esi:include` and ignore the rest of
-                        // raw data for now. It needs a new home, queued right way with includes
-                        let mut attempt_task = Task::new();
-                        let mut except_task = Task::new();
-                        for attempt in attempts {
-                            if let Event::ESI(Tag::Include {
-                                ref src,
-                                ref alt,
-                                ref continue_on_error,
-                            }) = attempt
-                            {
-                                let req = build_fragment_request(
-                                    original_request_metadata.clone_without_body(),
-                                    src,
-                                );
-                                let alt_req = alt.clone().map(|alt| {
-                                    build_fragment_request(
-                                        original_request_metadata.clone_without_body(),
-                                        &alt,
-                                    )
-                                });
-
-                                if let Some(fragment) = send_fragment_request(
-                                    req?,
-                                    alt_req,
-                                    *continue_on_error,
-                                    dispatch_fragment_request,
-                                )? {
-                                    // build up task list with fragments
-                                    attempt_task.include.push_back(fragment);
-                                }
-                            }
-                            if let Event::XML(event) = attempt {
-                                if elements.is_empty() {
-                                    debug!("nothing waiting so streaming directly to client");
-                                    output_writer.write_event(event)?;
-                                    output_writer
-                                        .inner()
-                                        .flush()
-                                        .expect("failed to flush output");
-                                } else {
-                                    debug!("pushing content to buffer, len: {}", elements.len());
-                                    let mut vec = Vec::new();
-                                    let mut writer = Writer::new(&mut vec);
-                                    writer.write_event(event)?;
-                                    attempt_task.raw.extend_from_slice(&vec);
-                                }
-                            }
-                        }
-                        for except in excepts {
-                            if let Event::ESI(Tag::Include {
-                                ref src,
-                                ref alt,
-                                ref continue_on_error,
-                            }) = except
-                            {
-                                let req = build_fragment_request(
-                                    original_request_metadata.clone_without_body(),
-                                    src,
-                                );
-                                let alt_req = alt.clone().map(|alt| {
-                                    build_fragment_request(
-                                        original_request_metadata.clone_without_body(),
-                                        &alt,
-                                    )
-                                });
-
-                                if let Some(fragment) = send_fragment_request(
-                                    req?,
-                                    alt_req,
-                                    *continue_on_error,
-                                    dispatch_fragment_request,
-                                )? {
-                                    // build up task list with fragments
-                                    except_task.include.push_back(fragment);
-                                }
-                            }
-                            if let Event::XML(event) = except {
-                                if elements.is_empty() {
-                                    debug!("nothing waiting so streaming directly to client");
-                                    output_writer.write_event(event)?;
-                                    output_writer
-                                        .inner()
-                                        .flush()
-                                        .expect("failed to flush output");
-                                } else {
-                                    debug!("pushing content to buffer, len: {}", elements.len());
-                                    let mut vec = Vec::new();
-                                    let mut writer = Writer::new(&mut vec);
-                                    writer.write_event(event)?;
-                                    except_task.raw.extend_from_slice(&vec);
-                                }
-                            }
-                        }
+                    Event::ESI(Tag::Try {
+                        attempt_events,
+                        except_events,
+                    }) => {
+                        let attempt_task = parse_task(
+                            attempt_events,
+                            &mut elements,
+                            output_writer,
+                            &original_request_metadata,
+                            dispatch_fragment_request,
+                        )?;
+                        let except_task = parse_task(
+                            except_events,
+                            &mut elements,
+                            output_writer,
+                            &original_request_metadata,
+                            dispatch_fragment_request,
+                        )?;
 
                         // push the elements
                         elements.push_back(Element::Try {
@@ -287,6 +210,53 @@ impl Processor {
 
         Ok(())
     }
+}
+
+fn parse_task(
+    events: Vec<Event>,
+    elements: &mut VecDeque<Element>,
+    output_writer: &mut Writer<impl Write>,
+    original_request_metadata: &Request,
+    dispatch_fragment_request: &FragmentRequestDispatcher,
+) -> Result<Task> {
+    let mut task = Task::new();
+    for event in events {
+        if let Event::ESI(Tag::Include {
+            ref src,
+            ref alt,
+            ref continue_on_error,
+        }) = event
+        {
+            let req = build_fragment_request(original_request_metadata.clone_without_body(), src);
+            let alt_req = alt.clone().map(|alt| {
+                build_fragment_request(original_request_metadata.clone_without_body(), &alt)
+            });
+
+            if let Some(fragment) =
+                send_fragment_request(req?, alt_req, *continue_on_error, dispatch_fragment_request)?
+            {
+                // build up task list with fragments
+                task.include.push_back(fragment);
+            }
+        }
+        if let Event::XML(event) = event {
+            if elements.is_empty() {
+                debug!("nothing waiting so streaming directly to client");
+                output_writer.write_event(event)?;
+                output_writer
+                    .inner()
+                    .flush()
+                    .expect("failed to flush output");
+            } else {
+                debug!("pushing content to buffer, len: {}", elements.len());
+                let mut vec = Vec::new();
+                let mut writer = Writer::new(&mut vec);
+                writer.write_event(event)?;
+                task.raw.extend_from_slice(&vec);
+            }
+        }
+    }
+    return Ok(task);
 }
 
 fn build_fragment_request(mut request: Request, url: &str) -> Result<Request> {

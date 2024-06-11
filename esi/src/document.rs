@@ -34,7 +34,6 @@ pub enum Element {
     Raw(Vec<u8>),
     Include(Fragment),
     Try {
-        // active_task: TryTasks,
         except_task: Task,
         attempt_task: Task,
     },

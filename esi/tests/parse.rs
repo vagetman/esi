@@ -195,12 +195,12 @@ fn parse_try_accept_except_include() -> Result<(), ExecutionError> {
             plain_include_parsed = true;
         }
         if let Event::ESI(Tag::Try {
-            attempts: attempt,
-            excepts: except,
+            attempt_events,
+            except_events,
         }) = event
         {
             // process accept tasks
-            for attempt_event in attempt {
+            for attempt_event in attempt_events {
                 if let Event::ESI(Tag::Include {
                     src,
                     alt,
@@ -214,7 +214,7 @@ fn parse_try_accept_except_include() -> Result<(), ExecutionError> {
                 }
             }
             // process except tasks
-            for except_event in except {
+            for except_event in except_events {
                 if let Event::ESI(Tag::Include {
                     src,
                     alt,
