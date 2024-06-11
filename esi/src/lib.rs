@@ -5,7 +5,7 @@ mod document;
 mod error;
 mod parse;
 
-use document::Tasks;
+use document::{PollTaskState, Task};
 use fastly::http::request::{PendingRequest, PollResult};
 use fastly::http::{header, Method, StatusCode, Url};
 use fastly::{mime, Body, Request, Response};
@@ -143,8 +143,8 @@ impl Processor {
                     Event::ESI(Tag::Try { attempts, excepts }) => {
                         // TODO: this will only support `esi:include` and ignore the rest of
                         // raw data for now. It needs a new home, queued right way with includes
-                        let mut attempt_task = Tasks::new();
-                        let mut except_task = Tasks::new();
+                        let mut attempt_task = Task::new();
+                        let mut except_task = Task::new();
                         for attempt in attempts {
                             if let Event::ESI(Tag::Include {
                                 ref src,
@@ -238,9 +238,8 @@ impl Processor {
 
                         // push the elements
                         elements.push_back(Element::Try {
-                            attempt_tasks: attempt_task,
-                            except_tasks: except_task,
-                            attempt_failed: false,
+                            attempt_task,
+                            except_task,
                         })
                     }
                     Event::XML(event) => {
@@ -446,188 +445,117 @@ fn poll_elements(
             }
 
             Element::Try {
-                mut attempt_failed,
-                mut attempt_tasks,
-                mut except_tasks,
+                mut attempt_task,
+                mut except_task,
             } => {
-                let mut attempts_completed = false;
-                let mut excepts_completed = false;
+                let attempt_state = poll_tasks(
+                    &mut attempt_task,
+                    dispatch_fragment_request,
+                    process_fragment_response,
+                )?;
+                let except_state = poll_tasks(
+                    &mut except_task,
+                    dispatch_fragment_request,
+                    process_fragment_response,
+                )?;
 
-                // check on the rest of `attempt_tasks`, unless
-                // if one of `esi:include` has failed,
-                if !attempt_failed {
-                    // make sure all the attempt tasks are completed
-                    // before moving the result to `Element::Raw`
-                    loop {
-                        let Some(Fragment {
-                            mut request,
-                            alt,
-                            continue_on_error,
-                            pending_request,
-                        }) = attempt_tasks.include.pop_front()
-                        else {
-                            break;
-                        };
-
-                        match pending_request.poll() {
-                            PollResult::Pending(pending_request) => {
-                                // Request is still pending, re-add it to the front of the queue and wait for the next poll.
-                                attempt_tasks.include.push_front(Fragment {
-                                    request,
-                                    alt,
-                                    continue_on_error,
-                                    pending_request,
-                                });
-                                break;
-                            }
-                            PollResult::Done(Ok(res)) => {
-                                // Let the app process the response if needed.
-                                let res = if let Some(process_response) = process_fragment_response
-                                {
-                                    process_response(&mut request, res)?
-                                } else {
-                                    res
-                                };
-
-                                // Request has completed, check the status code.
-                                if res.get_status().is_success() {
-                                    // Response status is success, write the response body to the attempt buffer.
-                                    attempt_tasks.raw.extend_from_slice(&res.into_body_bytes());
-                                } else {
-                                    // Response status is NOT success, either continue, fallback to an alt, or fail.
-                                    if let Some(alt) = alt {
-                                        debug!("request poll DONE ERROR, trying alt");
-                                        if let Some(pending_request) =
-                                            dispatch_fragment_request(alt?)?
-                                        {
-                                            // Remove `alt` and put it back to front
-                                            attempt_tasks.include.push_front(Fragment {
-                                                request,
-                                                alt: None,
-                                                continue_on_error,
-                                                pending_request,
-                                            });
-
-                                            break;
-                                        } else {
-                                            debug!("guest returned None, continuing");
-                                            continue;
-                                        }
-                                    } else if continue_on_error {
-                                        debug!("request poll DONE ERROR, NO ALT, continuing");
-                                        continue;
-                                    } else {
-                                        debug!("request poll DONE ERROR, NO ALT, failing attempt");
-                                        attempt_failed = true;
-                                    }
-                                }
-                            }
-                            PollResult::Done(Err(err)) => {
-                                return Err(ExecutionError::RequestError(err))
-                            }
-                        }
-                        // }
+                match (attempt_state, except_state) {
+                    (PollTaskState::Failed(_, _), PollTaskState::Failed(_, _)) => {
+                        todo!()
+                        // failed
                     }
-                    attempts_completed = true;
-                }
-
-                // check on the rest of `except_tasks` only when
-                // attempt tasks have not completed
-                if !attempts_completed {
-                    loop {
-                        let Some(Fragment {
-                            mut request,
-                            alt,
-                            continue_on_error,
-                            pending_request,
-                        }) = except_tasks.include.pop_front()
-                        else {
-                            break;
-                        };
-                        match pending_request.poll() {
-                            PollResult::Pending(pending_request) => {
-                                // Request is still pending, re-add it to the front of the queue and wait for the next poll.
-                                except_tasks.include.push_front(Fragment {
-                                    request,
-                                    alt,
-                                    continue_on_error,
-                                    pending_request,
-                                });
-                                break;
-                            }
-                            PollResult::Done(Ok(res)) => {
-                                // Let the app process the response if needed.
-                                let res = if let Some(process_response) = process_fragment_response
-                                {
-                                    process_response(&mut request, res)?
-                                } else {
-                                    res
-                                };
-
-                                // Request has completed, check the status code.
-                                if res.get_status().is_success() {
-                                    // Response status is success, write the response body to the attempt buffer.
-                                    except_tasks.raw.extend_from_slice(&res.into_body_bytes());
-                                    excepts_completed = true;
-                                } else {
-                                    // Response status is NOT success, either continue, fallback to an alt, or fail.
-                                    if let Some(alt) = alt {
-                                        debug!("request poll DONE ERROR, trying alt");
-                                        if let Some(pending_request) =
-                                            dispatch_fragment_request(alt?)?
-                                        {
-                                            // Re-build the `Task` with updated Fragment, without `alt`
-                                            except_tasks.include.push_front(Fragment {
-                                                request,
-                                                alt: None,
-                                                continue_on_error,
-                                                pending_request,
-                                            });
-
-                                            break;
-                                        } else {
-                                            debug!("guest returned None, continuing");
-                                            continue;
-                                        }
-                                    } else if continue_on_error {
-                                        debug!("request poll DONE ERROR, NO ALT, continuing");
-                                        continue;
-                                    } else {
-                                        debug!("request poll DONE ERROR, NO ALT, failing");
-                                        return Err(ExecutionError::UnexpectedStatus(
-                                            request.get_url_str().to_string(),
-                                            res.get_status().into(),
-                                        ));
-                                    }
-                                }
-                            }
-                            PollResult::Done(Err(err)) => {
-                                return Err(ExecutionError::RequestError(err))
-                            }
-                        }
+                    (PollTaskState::Pending, _) | (_, PollTaskState::Pending) => {
+                        // Request are still pending, re-add it to the front of the queue and wait for the next poll.
+                        elements.push_front(Element::Try {
+                            attempt_task,
+                            except_task,
+                        });
+                        break;
+                    }
+                    (PollTaskState::Succeeded, _) => {
+                        output_handler(output_writer, &attempt_task.raw);
+                        break;
+                    }
+                    (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
+                        output_handler(output_writer, &except_task.raw);
+                        break;
                     }
                 }
-
-                // if attempt tasks have completed
-                // write the responses to the output stream.
-                if attempts_completed {
-                    output_handler(output_writer, &attempt_tasks.raw);
-                } else if excepts_completed && attempt_failed {
-                    output_handler(output_writer, &except_tasks.raw);
-                } else {
-                    // Request are still pending, re-add it to the front of the queue and wait for the next poll.
-                    elements.push_front(Element::Try {
-                        attempt_failed,
-                        attempt_tasks,
-                        except_tasks,
-                    });
-                }
-                break;
             }
         }
     }
 
     Ok(())
+}
+
+fn poll_tasks(
+    task: &mut Task,
+    dispatch_fragment_request: &FragmentRequestDispatcher,
+    process_fragment_response: Option<&FragmentResponseProcessor>,
+) -> Result<PollTaskState> {
+    // return the Failed status if it's already known
+    if let PollTaskState::Failed(_, _) = &task.task_status {
+        debug!("The task has previously failed, returning failed status");
+        return Ok(task.task_status.clone());
+    }
+    while let Some(Fragment {
+        mut request,
+        alt,
+        continue_on_error,
+        pending_request,
+    }) = task.include.pop_front()
+    {
+        match pending_request.poll() {
+            PollResult::Pending(pending_request) => {
+                task.include.push_front(Fragment {
+                    request,
+                    alt,
+                    continue_on_error,
+                    pending_request,
+                });
+                return Ok(PollTaskState::Pending);
+            }
+            PollResult::Done(Ok(res)) => {
+                let res = if let Some(process_response) = process_fragment_response {
+                    process_response(&mut request, res)?
+                } else {
+                    res
+                };
+
+                if res.get_status().is_success() {
+                    task.raw.extend_from_slice(&res.into_body_bytes());
+                } else {
+                    if let Some(alt) = alt {
+                        debug!("request poll DONE ERROR, trying alt");
+                        if let Some(pending_request) = dispatch_fragment_request(alt?)? {
+                            task.include.push_front(Fragment {
+                                request,
+                                alt: None,
+                                continue_on_error,
+                                pending_request,
+                            });
+                            return Ok(PollTaskState::Pending);
+                        }
+                        debug!("guest returned None, continuing");
+                        continue;
+                    }
+                    if continue_on_error {
+                        debug!("request poll DONE ERROR, NO ALT, continuing");
+                        continue;
+                    }
+                    debug!("request poll DONE ERROR, NO ALT, failing");
+                    task.task_status = PollTaskState::Failed(
+                        request.get_url_str().to_string(),
+                        res.get_status().into(),
+                    );
+                    return Ok(task.task_status.clone());
+                }
+            }
+            PollResult::Done(Err(err)) => return Err(ExecutionError::RequestError(err)),
+        }
+    }
+
+    Ok(PollTaskState::Succeeded)
 }
 
 // Helper function to create an XML reader from a body.

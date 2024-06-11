@@ -17,13 +17,13 @@ pub struct Fragment {
 /// `Task` is combining raw data and an include fragment for both `attempt` and `except` arms
 /// before copied to `Element::Raw` when all the `Fragment`s are processed.
 #[derive(Default)]
-pub struct Tasks {
+pub struct Task {
     pub raw: Vec<u8>,
     pub include: VecDeque<Fragment>,
-    pub failed: bool,
+    pub task_status: PollTaskState,
 }
 
-impl Tasks {
+impl Task {
     pub fn new() -> Self {
         Self::default()
     }
@@ -34,10 +34,22 @@ pub enum Element {
     Raw(Vec<u8>),
     Include(Fragment),
     Try {
-        attempt_failed: bool,
-        attempt_tasks: Tasks,
-        except_tasks: Tasks,
+        // active_task: TryTasks,
+        except_task: Task,
+        attempt_task: Task,
     },
+}
+
+#[derive(PartialEq, Clone)]
+pub enum PollTaskState {
+    Failed(String, u16),
+    Pending,
+    Succeeded,
+}
+impl Default for PollTaskState {
+    fn default() -> Self {
+        Self::Pending
+    }
 }
 
 impl std::fmt::Debug for Element {

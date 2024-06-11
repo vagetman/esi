@@ -194,8 +194,6 @@ where
     let mut open_include = false;
 
     loop {
-        // let q =
-        // println!("Event -- {q:?}");
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(ref e)) if e.name() == QName(esi_attempt) => {
                 if inside_tag.is_some() || attempt_found {
