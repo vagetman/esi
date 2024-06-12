@@ -11,7 +11,7 @@ readme = "./README.md"
 [dependencies]
 quick-xml = "0.27.1"
 thiserror = "^1.0"
-fastly = "^0.9"
+fastly = "0.10.1"
 log = "^0.4"
 
 [dev-dependencies]

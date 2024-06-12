@@ -146,14 +146,14 @@ impl Processor {
                     }) => {
                         let attempt_task = parse_task(
                             attempt_events,
-                            &mut elements,
+                            &elements,
                             output_writer,
                             &original_request_metadata,
                             dispatch_fragment_request,
                         )?;
                         let except_task = parse_task(
                             except_events,
-                            &mut elements,
+                            &elements,
                             output_writer,
                             &original_request_metadata,
                             dispatch_fragment_request,
@@ -163,7 +163,7 @@ impl Processor {
                         elements.push_back(Element::Try {
                             attempt_task,
                             except_task,
-                        })
+                        });
                     }
                     Event::XML(event) => {
                         if elements.is_empty() {
@@ -214,7 +214,7 @@ impl Processor {
 
 fn parse_task(
     events: Vec<Event>,
-    elements: &mut VecDeque<Element>,
+    elements: &VecDeque<Element>,
     output_writer: &mut Writer<impl Write>,
     original_request_metadata: &Request,
     dispatch_fragment_request: &FragmentRequestDispatcher,
@@ -248,7 +248,7 @@ fn parse_task(
                     .flush()
                     .expect("failed to flush output");
             } else {
-                debug!("pushing content to buffer, len: {}", elements.len());
+                debug!("pushing non-ESI content to buffer, len: {}", elements.len());
                 let mut vec = Vec::new();
                 let mut writer = Writer::new(&mut vec);
                 writer.write_event(event)?;
@@ -256,7 +256,7 @@ fn parse_task(
             }
         }
     }
-    return Ok(task);
+    Ok(task)
 }
 
 fn build_fragment_request(mut request: Request, url: &str) -> Result<Request> {
@@ -336,10 +336,7 @@ fn poll_elements(
     dispatch_fragment_request: &FragmentRequestDispatcher,
     process_fragment_response: Option<&FragmentResponseProcessor>,
 ) -> Result<()> {
-    loop {
-        let Some(element) = elements.pop_front() else {
-            break;
-        };
+    while let Some(element) = elements.pop_front() {
 
         match element {
             Element::Raw(raw) => {
@@ -384,30 +381,25 @@ fn poll_elements(
                                 .expect("failed to flush output");
                         } else {
                             // Response status is NOT success, either continue, fallback to an alt, or fail.
-                            if let Some(alt) = alt {
+                            if let Some(request) = alt {
                                 debug!("request poll DONE ERROR, trying alt");
-                                if let Some(pending_request) = dispatch_fragment_request(alt?)? {
-                                    elements.push_front(Element::Include(Fragment {
-                                        request,
-                                        alt: None,
-                                        continue_on_error,
-                                        pending_request,
-                                    }));
+                                if let Some(fragment) = 
+                                        send_fragment_request(request?, None, continue_on_error, dispatch_fragment_request)? {
+                                    // push the request back to front with ALT as the request
+                                    elements.push_front(Element::Include(fragment));
                                     break;
-                                } else {
-                                    debug!("guest returned None, continuing");
-                                    continue;
                                 }
+                                debug!("guest returned None, continuing");
+                                continue;   
                             } else if continue_on_error {
                                 debug!("request poll DONE ERROR, NO ALT, continuing");
                                 continue;
-                            } else {
-                                debug!("request poll DONE ERROR, NO ALT, failing");
-                                return Err(ExecutionError::UnexpectedStatus(
-                                    request.get_url_str().to_string(),
-                                    res.get_status().into(),
-                                ));
                             }
+                            debug!("request poll DONE ERROR, NO ALT, failing");
+                            return Err(ExecutionError::UnexpectedStatus(
+                                request.get_url_str().to_string(),
+                                res.get_status().into(),
+                            ));
                         }
                     }
                     PollResult::Done(Err(err)) => return Err(ExecutionError::RequestError(err)),
@@ -495,15 +487,13 @@ fn poll_tasks(
                 if res.get_status().is_success() {
                     task.raw.extend_from_slice(&res.into_body_bytes());
                 } else {
-                    if let Some(alt) = alt {
+                    // Response status is NOT success, either continue, fallback to an alt, or fail.
+                    if let Some(request) = alt {
                         debug!("request poll DONE ERROR, trying alt");
-                        if let Some(pending_request) = dispatch_fragment_request(alt?)? {
-                            task.include.push_front(Fragment {
-                                request,
-                                alt: None,
-                                continue_on_error,
-                                pending_request,
-                            });
+                        if let Some(fragment) = 
+                                        send_fragment_request(request?, None, continue_on_error, dispatch_fragment_request)? {
+                            // push the request back to front with ALT as the request
+                            task.include.push_front(fragment);
                             return Ok(PollTaskState::Pending);
                         }
                         debug!("guest returned None, continuing");

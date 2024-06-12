@@ -23,6 +23,7 @@ impl Configuration {
     /// Sets an alternative ESI namespace, which is used to identify ESI instructions.
     ///
     /// For example, setting this to `test` would cause the processor to only match tags like `<test:include>`.
+    #[must_use]
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = namespace.into();
         self

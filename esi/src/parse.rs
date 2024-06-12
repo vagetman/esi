@@ -60,10 +60,10 @@ where
     loop {
         match reader.read_event_into(&mut buffer) {
             // Handle <esi:remove> tags
-            Ok(XmlEvent::Start(elem)) if elem.starts_with(&esi_remove) => {
+            Ok(XmlEvent::Start(elem)) if elem.name() == QName(&esi_remove) => {
                 remove = true;
             }
-            Ok(XmlEvent::End(elem)) if elem.starts_with(&esi_remove) => {
+            Ok(XmlEvent::End(elem)) if elem.name() == QName(&esi_remove) => {
                 if !remove {
                     return Err(ExecutionError::UnexpectedClosingTag(
                         String::from_utf8(elem.to_vec()).unwrap(),
@@ -253,7 +253,6 @@ where
                 break;
             }
             Ok(XmlEvent::Text(txt)) => {
-                println!("Inside tag -- {inside_tag:?}");
                 if inside_tag.is_none() {
                     // no inner content allowed outside `esi:attempt` or `esi:exempt` tags
                     continue;
