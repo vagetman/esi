@@ -108,6 +108,7 @@ impl Processor {
             Request::clone_without_body,
         );
 
+        let is_escaped = self.configuration.is_escaped;
         // Begin parsing the source document
         parse_tags(
             &self.configuration.namespace,
@@ -123,11 +124,13 @@ impl Processor {
                         let req = build_fragment_request(
                             original_request_metadata.clone_without_body(),
                             &src,
+                            is_escaped,
                         );
                         let alt_req = alt.map(|alt| {
                             build_fragment_request(
                                 original_request_metadata.clone_without_body(),
                                 &alt,
+                                is_escaped,
                             )
                         });
 
@@ -146,15 +149,13 @@ impl Processor {
                     }) => {
                         let attempt_task = parse_task(
                             attempt_events,
-                            &elements,
-                            output_writer,
+                            is_escaped,
                             &original_request_metadata,
                             dispatch_fragment_request,
                         )?;
                         let except_task = parse_task(
                             except_events,
-                            &elements,
-                            output_writer,
+                            is_escaped,
                             &original_request_metadata,
                             dispatch_fragment_request,
                         )?;
@@ -170,7 +171,7 @@ impl Processor {
                             debug!("nothing waiting so streaming directly to client");
                             output_writer.write_event(event)?;
                             output_writer
-                                .inner()
+                                .get_mut()
                                 .flush()
                                 .expect("failed to flush output");
                         } else {
@@ -214,8 +215,7 @@ impl Processor {
 
 fn parse_task(
     events: Vec<Event>,
-    elements: &VecDeque<Element>,
-    output_writer: &mut Writer<impl Write>,
+    is_escaped: bool,
     original_request_metadata: &Request,
     dispatch_fragment_request: &FragmentRequestDispatcher,
 ) -> Result<Task> {
@@ -227,9 +227,17 @@ fn parse_task(
             ref continue_on_error,
         }) = event
         {
-            let req = build_fragment_request(original_request_metadata.clone_without_body(), src);
+            let req = build_fragment_request(
+                original_request_metadata.clone_without_body(),
+                src,
+                is_escaped,
+            );
             let alt_req = alt.clone().map(|alt| {
-                build_fragment_request(original_request_metadata.clone_without_body(), &alt)
+                build_fragment_request(
+                    original_request_metadata.clone_without_body(),
+                    &alt,
+                    is_escaped,
+                )
             });
 
             if let Some(fragment) =
@@ -240,33 +248,31 @@ fn parse_task(
             }
         }
         if let Event::XML(event) = event {
-            if elements.is_empty() {
-                debug!("nothing waiting so streaming directly to client");
-                output_writer.write_event(event)?;
-                output_writer
-                    .inner()
-                    .flush()
-                    .expect("failed to flush output");
-            } else {
-                debug!("pushing non-ESI content to buffer, len: {}", elements.len());
-                let mut vec = Vec::new();
-                let mut writer = Writer::new(&mut vec);
-                writer.write_event(event)?;
-                task.raw.extend_from_slice(&vec);
-            }
+            debug!("XML event inside esi:try -- {event:?}");
+            debug!(
+                "pushing non-ESI content to task's buffer, len: {}",
+                task.raw.len()
+            );
+            let mut vec = Vec::new();
+            let mut writer = Writer::new(&mut vec);
+            writer.write_event(event)?;
+            task.raw.extend_from_slice(&vec)
         }
     }
     Ok(task)
 }
 
-fn build_fragment_request(mut request: Request, url: &str) -> Result<Request> {
-    let escaped_url = match quick_xml::escape::unescape(url) {
-        Ok(url) => url,
-        Err(err) => {
-            return Err(ExecutionError::InvalidRequestUrl(err.to_string()));
+fn build_fragment_request(mut request: Request, url: &str, is_escaped: bool) -> Result<Request> {
+    let escaped_url = if is_escaped {
+        match quick_xml::escape::unescape(url) {
+            Ok(url) => url.to_string(),
+            Err(err) => {
+                return Err(ExecutionError::InvalidRequestUrl(err.to_string()));
+            }
         }
-    }
-    .to_string();
+    } else {
+        url.to_string()
+    };
 
     if escaped_url.starts_with('/') {
         match Url::parse(
@@ -337,11 +343,10 @@ fn poll_elements(
     process_fragment_response: Option<&FragmentResponseProcessor>,
 ) -> Result<()> {
     while let Some(element) = elements.pop_front() {
-
         match element {
             Element::Raw(raw) => {
                 debug!("writing previously queued other content");
-                output_writer.inner().write_all(&raw).unwrap();
+                output_writer.get_mut().write_all(&raw).unwrap();
             }
             Element::Include(Fragment {
                 mut request,
@@ -372,25 +377,29 @@ fn poll_elements(
                         if res.get_status().is_success() {
                             // Response status is success, write the response body to the output stream.
                             output_writer
-                                .inner()
+                                .get_mut()
                                 .write_all(&res.into_body_bytes())
                                 .unwrap();
                             output_writer
-                                .inner()
+                                .get_mut()
                                 .flush()
                                 .expect("failed to flush output");
                         } else {
                             // Response status is NOT success, either continue, fallback to an alt, or fail.
                             if let Some(request) = alt {
                                 debug!("request poll DONE ERROR, trying alt");
-                                if let Some(fragment) = 
-                                        send_fragment_request(request?, None, continue_on_error, dispatch_fragment_request)? {
+                                if let Some(fragment) = send_fragment_request(
+                                    request?,
+                                    None,
+                                    continue_on_error,
+                                    dispatch_fragment_request,
+                                )? {
                                     // push the request back to front with ALT as the request
                                     elements.push_front(Element::Include(fragment));
                                     break;
                                 }
                                 debug!("guest returned None, continuing");
-                                continue;   
+                                continue;
                             } else if continue_on_error {
                                 debug!("request poll DONE ERROR, NO ALT, continuing");
                                 continue;
@@ -422,9 +431,20 @@ fn poll_elements(
                 )?;
 
                 match (attempt_state, except_state) {
-                    (PollTaskState::Failed(_, _), PollTaskState::Failed(_, _)) => {
-                        todo!()
-                        // failed
+                    (PollTaskState::Succeeded, _) => {
+                        output_handler(output_writer, &attempt_task.raw);
+                        break;
+                    }
+                    (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
+                        output_handler(output_writer, &except_task.raw);
+                        break;
+                    }
+                    (PollTaskState::Failed(req, res), PollTaskState::Failed(_req, _res)) => {
+                        // both tasks failed
+                        return Err(ExecutionError::UnexpectedStatus(
+                            req.get_url_str().to_string(),
+                            res,
+                        ));
                     }
                     (PollTaskState::Pending, _) | (_, PollTaskState::Pending) => {
                         // Request are still pending, re-add it to the front of the queue and wait for the next poll.
@@ -432,14 +452,6 @@ fn poll_elements(
                             attempt_task,
                             except_task,
                         });
-                        break;
-                    }
-                    (PollTaskState::Succeeded, _) => {
-                        output_handler(output_writer, &attempt_task.raw);
-                        break;
-                    }
-                    (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
-                        output_handler(output_writer, &except_task.raw);
                         break;
                     }
                 }
@@ -490,8 +502,12 @@ fn poll_tasks(
                     // Response status is NOT success, either continue, fallback to an alt, or fail.
                     if let Some(request) = alt {
                         debug!("request poll DONE ERROR, trying alt");
-                        if let Some(fragment) = 
-                                        send_fragment_request(request?, None, continue_on_error, dispatch_fragment_request)? {
+                        if let Some(fragment) = send_fragment_request(
+                            request?,
+                            None,
+                            continue_on_error,
+                            dispatch_fragment_request,
+                        )? {
                             // push the request back to front with ALT as the request
                             task.include.push_front(fragment);
                             return Ok(PollTaskState::Pending);
@@ -504,10 +520,7 @@ fn poll_tasks(
                         continue;
                     }
                     debug!("request poll DONE ERROR, NO ALT, failing");
-                    task.task_status = PollTaskState::Failed(
-                        request.get_url_str().to_string(),
-                        res.get_status().into(),
-                    );
+                    task.task_status = PollTaskState::Failed(request, res.get_status().into());
                     return Ok(task.task_status.clone());
                 }
             }
@@ -523,15 +536,16 @@ fn reader_from_body(body: Body) -> Reader<Body> {
     let mut reader = Reader::from_reader(body);
 
     // TODO: make this configurable
-    reader.check_end_names(false);
+    let config = reader.config_mut();
+    config.check_end_names = false;
 
     reader
 }
 // helper function to drive output to a response stream
 fn output_handler(output_writer: &mut Writer<impl Write>, buffer: &[u8]) {
-    output_writer.inner().write_all(buffer).unwrap();
+    output_writer.get_mut().write_all(buffer).unwrap();
     output_writer
-        .inner()
+        .get_mut()
         .flush()
         .expect("failed to flush output");
 }

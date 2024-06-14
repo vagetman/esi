@@ -39,11 +39,20 @@ pub enum Element {
     },
 }
 
-#[derive(PartialEq, Clone)]
+// #[derive(PartialEq, Clone)]
 pub enum PollTaskState {
-    Failed(String, u16),
+    Failed(Request, u16),
     Pending,
     Succeeded,
+}
+impl Clone for PollTaskState {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Failed(req, arg1) => Self::Failed(req.clone_without_body(), arg1.clone()),
+            Self::Pending => Self::Pending,
+            Self::Succeeded => Self::Succeeded,
+        }
+    }
 }
 impl Default for PollTaskState {
     fn default() -> Self {

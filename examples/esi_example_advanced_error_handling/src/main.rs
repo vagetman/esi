@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use fastly::{http::StatusCode, mime, Request, Response};
 use log::{error, info};
 use quick_xml::{Reader, Writer};
@@ -56,9 +58,9 @@ fn main() {
             }
             Err(err) => {
                 error!("error processing ESI document: {}", err);
-                xml_writer
-                    .inner()
-                    .write_str(include_str!("error.html.fragment"));
+                let _ = xml_writer
+                    .get_mut()
+                    .write(include_str!("error.html.fragment").as_bytes());
                 xml_writer.into_inner().finish().unwrap_or_else(|_| {
                     error!("error flushing error response to client");
                 });

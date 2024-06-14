@@ -150,8 +150,7 @@ fn parse_include<'a>(elem: &BytesStart) -> Result<Tag<'a>> {
         .attributes()
         .flatten()
         .find(|attr| attr.key.into_inner() == b"onerror")
-        .map(|attr| &attr.value.to_vec() == b"continue")
-        == Some(true);
+        .is_some_and(|attr| &attr.value.to_vec() == b"continue");
 
     Ok(Tag::Include {
         src,
@@ -189,10 +188,14 @@ where
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(ref e)) if e.name() == QName(esi_attempt) => {
                 if inside_tag.is_some() || attempt_found {
+                    debug!("unexpected attempt_found: {attempt_found}, event {e:?}");
+                    debug!("unexpected inside_tag: {inside_tag:?}, event {e:?}");
                     return Err(ExecutionError::UnexpectedOpeningTag(
                         String::from_utf8(e.to_vec()).unwrap(),
                     ));
                 }
+                debug!("attempt_found: {attempt_found}, event {e:?}");
+                debug!("inside_tag: {inside_tag:?}, event {e:?}");
                 inside_tag = Some(TryNestedTag::Attempt);
                 attempt_found = true;
             }
@@ -260,9 +263,11 @@ where
                 match inside_tag {
                     Some(TryNestedTag::Attempt) => {
                         attempt_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
+                        attempt_found = true;
                     }
                     Some(TryNestedTag::Except) => {
                         except_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
+                        except_found = true;
                     }
                     _ => (),
                 }

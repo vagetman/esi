@@ -9,12 +9,14 @@
 pub struct Configuration {
     /// The XML namespace to use when scanning for ESI tags. Defaults to `esi`.
     pub namespace: String,
+    pub is_escaped: bool,
 }
 
 impl Default for Configuration {
     fn default() -> Self {
         Self {
             namespace: String::from("esi"),
+            is_escaped: true,
         }
     }
 }
@@ -26,6 +28,11 @@ impl Configuration {
     #[must_use]
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = namespace.into();
+        self
+    }
+    // Sets a non-HTML mode, work with JSON files, where URLs are not escaped
+    pub fn with_escaped(mut self, is_escaped: impl Into<bool>) -> Self {
+        self.is_escaped = is_escaped.into();
         self
     }
 }
