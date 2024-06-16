@@ -60,7 +60,7 @@ fn main() {
                 error!("error processing ESI document: {}", err);
                 let _ = xml_writer
                     .get_mut()
-                    .write(include_str!("error.html.fragment").as_bytes());
+                    .write(include_bytes!("error.html.fragment"));
                 xml_writer.into_inner().finish().unwrap_or_else(|_| {
                     error!("error flushing error response to client");
                 });

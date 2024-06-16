@@ -15,18 +15,23 @@ pub struct Fragment {
 }
 
 /// `Task` is combining raw data and an include fragment for both `attempt` and `except` arms
-/// before copied to `Element::Raw` when all the `Fragment`s are processed.
+/// the result is written to `output`.
 #[derive(Default)]
 pub struct Task {
-    pub raw: Vec<u8>,
-    pub include: VecDeque<Fragment>,
-    pub task_status: PollTaskState,
+    pub queue: VecDeque<Chunk>,
+    pub output: Vec<u8>,
+    pub status: PollTaskState,
 }
 
 impl Task {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+pub enum Chunk {
+    Raw(Vec<u8>),
+    Include(Fragment),
 }
 
 /// A section of the pending response, either raw XML data or a pending fragment request.
@@ -48,7 +53,7 @@ pub enum PollTaskState {
 impl Clone for PollTaskState {
     fn clone(&self) -> Self {
         match self {
-            Self::Failed(req, arg1) => Self::Failed(req.clone_without_body(), arg1.clone()),
+            Self::Failed(req, res) => Self::Failed(req.clone_without_body(), *res),
             Self::Pending => Self::Pending,
             Self::Succeeded => Self::Succeeded,
         }
