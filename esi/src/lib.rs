@@ -435,11 +435,11 @@ fn poll_elements(
 
                 match (attempt_state, except_state) {
                     (PollTaskState::Succeeded, _) => {
-                        task_output_handler(output_writer, attempt_task);
+                        output_handler(output_writer, &attempt_task.output);
                         break;
                     }
                     (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
-                        task_output_handler(output_writer, attempt_task);
+                        output_handler(output_writer, &except_task.output);
                         break;
                     }
                     (PollTaskState::Failed(req, res), PollTaskState::Failed(_req, _res)) => {
@@ -559,19 +559,6 @@ fn reader_from_body(body: Body) -> Reader<Body> {
     config.check_end_names = false;
 
     reader
-}
-
-// helper function to drive output from tasks's buffer and the queue a response stream
-// TODO: probably unnecessary
-fn task_output_handler(output_writer: &mut Writer<impl Write>, task: Task) {
-    output_handler(output_writer, &task.output);
-    // TODO: probably unnecessary
-    for chunk in &task.queue {
-        debug!("Attempt Leftovers FOUND!");
-        if let Chunk::Raw(data) = chunk {
-            output_handler(output_writer, data);
-        }
-    }
 }
 
 // helper function to drive output to a response stream
