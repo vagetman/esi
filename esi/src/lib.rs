@@ -9,7 +9,7 @@ use document::{Chunk, PollTaskState, Task};
 use fastly::http::request::{PendingRequest, PollResult};
 use fastly::http::{header, Method, StatusCode, Url};
 use fastly::{mime, Body, Request, Response};
-use log::{debug, error};
+use log::{debug, error, trace};
 use quick_xml::{Reader, Writer};
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
@@ -187,13 +187,6 @@ impl Processor {
                     }
                 }
 
-                poll_elements(
-                    &mut elements,
-                    output_writer,
-                    dispatch_fragment_request,
-                    process_fragment_response,
-                )?;
-
                 Ok(())
             },
         )?;
@@ -357,18 +350,8 @@ fn poll_elements(
                 continue_on_error,
                 pending_request,
             }) => {
-                match pending_request.poll() {
-                    PollResult::Pending(pending_request) => {
-                        // Request is still pending, re-add it to the front of the queue and wait for the next poll.
-                        elements.push_front(Element::Include(Fragment {
-                            request,
-                            alt,
-                            continue_on_error,
-                            pending_request,
-                        }));
-                        break;
-                    }
-                    PollResult::Done(Ok(res)) => {
+                match pending_request.wait() {
+                    Ok(res) => {
                         // Let the app process the response if needed.
                         let res = if let Some(process_response) = process_fragment_response {
                             process_response(&mut request, res)?
@@ -414,7 +397,7 @@ fn poll_elements(
                             ));
                         }
                     }
-                    PollResult::Done(Err(err)) => return Err(ExecutionError::RequestError(err)),
+                    Err(err) => return Err(ExecutionError::RequestError(err)),
                 }
             }
 
@@ -436,11 +419,11 @@ fn poll_elements(
                 match (attempt_state, except_state) {
                     (PollTaskState::Succeeded, _) => {
                         output_handler(output_writer, &attempt_task.output);
-                        break;
+                        continue;
                     }
                     (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
                         output_handler(output_writer, &except_task.output);
-                        break;
+                        continue;
                     }
                     (PollTaskState::Failed(req, res), PollTaskState::Failed(_req, _res)) => {
                         // both tasks failed
@@ -495,17 +478,8 @@ fn poll_tasks(
             }
         };
 
-        match pending_request.poll() {
-            PollResult::Pending(pending_request) => {
-                task.queue.push_front(Chunk::Include(Fragment {
-                    request,
-                    alt,
-                    continue_on_error,
-                    pending_request,
-                }));
-                return Ok(PollTaskState::Pending);
-            }
-            PollResult::Done(Ok(res)) => {
+        match pending_request.wait() {
+            Ok(res) => {
                 let res = if let Some(process_response) = process_fragment_response {
                     process_response(&mut request, res)?
                 } else {
@@ -513,7 +487,7 @@ fn poll_tasks(
                 };
 
                 if res.get_status().is_success() {
-                    debug!(
+                    trace!(
                         "Poll is success, {} - {}",
                         request.get_url_str(),
                         res.get_status()
@@ -545,7 +519,7 @@ fn poll_tasks(
                 task.status = PollTaskState::Failed(request, res.get_status().into());
                 return Ok(task.status.clone());
             }
-            PollResult::Done(Err(err)) => return Err(ExecutionError::RequestError(err)),
+            Err(err) => return Err(ExecutionError::RequestError(err)),
         }
     }
 }

@@ -188,14 +188,10 @@ where
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(ref e)) if e.name() == QName(esi_attempt) => {
                 if inside_tag.is_some() || attempt_found {
-                    debug!("unexpected attempt_found: {attempt_found}, event {e:?}");
-                    debug!("unexpected inside_tag: {inside_tag:?}, event {e:?}");
                     return Err(ExecutionError::UnexpectedOpeningTag(
                         String::from_utf8(e.to_vec()).unwrap(),
                     ));
                 }
-                debug!("attempt_found: {attempt_found}, event {e:?}");
-                debug!("inside_tag: {inside_tag:?}, event {e:?}");
                 inside_tag = Some(TryNestedTag::Attempt);
                 attempt_found = true;
             }

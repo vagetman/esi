@@ -5,7 +5,7 @@ description = "A streaming parser and executor for Edge Side Includes"
 repository = "https://github.com/fastly/esi"
 license = "MIT"
 authors = ["Kailan Blanks <kblanks@fastly.com>"]
-edition = "2018"
+edition = "2021"
 readme = "./README.md"
 
 [dependencies]
