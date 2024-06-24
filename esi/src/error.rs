@@ -33,6 +33,10 @@ pub enum ExecutionError {
     /// An ESI fragment request returned an unexpected HTTP status code.
     #[error("received unexpected status code for fragment `{0}`: {1}")]
     UnexpectedStatus(String, u16),
+
+    /// This error is returned when the parser encounters an unexpected end of document.
+    #[error("unexpected end of document")]
+    UnexpectedEndOfDocument,
 }
 
 pub type Result<T> = std::result::Result<T, ExecutionError>;

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use crate::Result;
 use fastly::{http::request::PendingRequest, Request};
+use quick_xml::Writer;
 
 pub struct Fragment {
     // Metadata of the request
@@ -16,22 +17,27 @@ pub struct Fragment {
 
 /// `Task` is combining raw data and an include fragment for both `attempt` and `except` arms
 /// the result is written to `output`.
-#[derive(Default)]
+// #[derive(Default)]
 pub struct Task {
-    pub queue: VecDeque<Chunk>,
-    pub output: Vec<u8>,
+    pub queue: VecDeque<Element>,
+    pub output: Writer<Vec<u8>>,
     pub status: PollTaskState,
+}
+
+impl Default for Task {
+    fn default() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            output: Writer::new(Vec::new()),
+            status: PollTaskState::default(),
+        }
+    }
 }
 
 impl Task {
     pub fn new() -> Self {
         Self::default()
     }
-}
-
-pub enum Chunk {
-    Raw(Vec<u8>),
-    Include(Fragment),
 }
 
 /// A section of the pending response, either raw XML data or a pending fragment request.

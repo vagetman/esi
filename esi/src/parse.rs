@@ -5,6 +5,14 @@ use quick_xml::name::QName;
 use quick_xml::Reader;
 use std::io::BufRead;
 
+// State carrier of Try branch
+#[derive(Debug, PartialEq)]
+enum TryTagArms {
+    Try,
+    Attempt,
+    Except,
+}
+
 /// Representation of an ESI tag from a source response.
 #[derive(Debug)]
 pub struct Include {
@@ -34,57 +42,84 @@ pub enum Event<'e> {
     ESI(Tag<'e>),
 }
 
-/// Parses the ESI document from the given `reader` and calls the `callback` closure upon each successfully parsed ESI tag.
-pub fn parse_tags<'a, R>(
-    namespace: &str,
+// #[derive(Debug)]
+struct EsiTags {
+    include: Vec<u8>,
+    comment: Vec<u8>,
+    remove: Vec<u8>,
+    tryy: Vec<u8>,
+    attempt: Vec<u8>,
+    esi_except: Vec<u8>,
+}
+impl EsiTags {
+    fn init(namespace: &str) -> Self {
+        Self {
+            include: format!("{namespace}:include",).into_bytes(),
+            comment: format!("{namespace}:comment",).into_bytes(),
+            remove: format!("{namespace}:remove",).into_bytes(),
+            tryy: format!("{namespace}:try",).into_bytes(),
+            attempt: format!("{namespace}:attempt",).into_bytes(),
+            esi_except: format!("{namespace}:except",).into_bytes(),
+        }
+    }
+}
+
+fn do_parse<'a, R>(
     reader: &mut Reader<R>,
     callback: &mut dyn FnMut(Event<'a>) -> Result<()>,
+    task: &mut Vec<Event<'a>>,
+    depth: &mut usize,
+    current_arm: &mut Option<TryTagArms>,
+    tags: &EsiTags,
 ) -> Result<()>
 where
     R: BufRead,
 {
-    debug!("Parsing document...");
-
-    let mut remove = false;
+    let mut is_remove_tag = false;
     let mut open_include = false;
 
-    let esi_include = format!("{namespace}:include",).into_bytes();
-    let esi_comment = format!("{namespace}:comment",).into_bytes();
-    let esi_remove = format!("{namespace}:remove",).into_bytes();
-    let esi_try = format!("{namespace}:try",).into_bytes();
-    let esi_attempt = format!("{namespace}:attempt",).into_bytes();
-    let esi_except = format!("{namespace}:except",).into_bytes();
+    let attempt_events = &mut Vec::new();
+    let except_events = &mut Vec::new();
 
     let mut buffer = Vec::new();
     // Parse tags and build events vec
     loop {
         match reader.read_event_into(&mut buffer) {
             // Handle <esi:remove> tags
-            Ok(XmlEvent::Start(elem)) if elem.name() == QName(&esi_remove) => {
-                remove = true;
+            Ok(XmlEvent::Start(elem)) if elem.name() == QName(&tags.remove) => {
+                is_remove_tag = true;
             }
-            Ok(XmlEvent::End(elem)) if elem.name() == QName(&esi_remove) => {
-                if !remove {
+
+            Ok(XmlEvent::End(elem)) if elem.name() == QName(&tags.remove) => {
+                if !is_remove_tag {
                     return Err(ExecutionError::UnexpectedClosingTag(
                         String::from_utf8(elem.to_vec()).unwrap(),
                     ));
                 }
 
-                remove = false;
+                is_remove_tag = false;
             }
-            _ if remove => continue,
+            _ if is_remove_tag => continue,
 
             // Handle <esi:include> tags, and ignore the contents if they are not self-closing
-            Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
-                callback(Event::ESI(parse_include(&elem)?))?;
+            Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(&tags.include) => {
+                if *depth == 0 {
+                    callback(Event::ESI(parse_include(&elem)?))?;
+                } else {
+                    task.push(Event::ESI(parse_include(&elem)?));
+                }
             }
 
-            Ok(XmlEvent::Start(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
+            Ok(XmlEvent::Start(elem)) if elem.name().into_inner().starts_with(&tags.include) => {
                 open_include = true;
-                callback(Event::ESI(parse_include(&elem)?))?;
+                if *depth == 0 {
+                    callback(Event::ESI(parse_include(&elem)?))?;
+                } else {
+                    task.push(Event::ESI(parse_include(&elem)?));
+                }
             }
 
-            Ok(XmlEvent::End(elem)) if elem.name().into_inner().starts_with(&esi_include) => {
+            Ok(XmlEvent::End(elem)) if elem.name().into_inner().starts_with(&tags.include) => {
                 if !open_include {
                     return Err(ExecutionError::UnexpectedClosingTag(
                         String::from_utf8(elem.to_vec()).unwrap(),
@@ -97,30 +132,131 @@ where
             _ if open_include => continue,
 
             // Ignore <esi:comment> tags
-            Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(&esi_comment) => {
+            Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(&tags.comment) => {
                 continue
             }
 
             // Handle <esi:try> tags
-            Ok(XmlEvent::Start(ref elem)) if elem.name() == QName(&esi_try) => {
-                parse_try(
-                    reader,
-                    callback,
-                    &esi_include,
-                    &esi_attempt,
-                    &esi_except,
-                    &esi_try,
-                )?;
+            Ok(XmlEvent::Start(ref elem)) if elem.name() == QName(&tags.tryy) => {
+                *current_arm = Some(TryTagArms::Try);
+                *depth += 1;
+                continue;
+            }
+
+            // Handle <esi:attempt> tags in recursion
+            Ok(XmlEvent::Start(ref e)) if e.name() == QName(&tags.attempt) => {
+                if *current_arm == Some(TryTagArms::Attempt)
+                    || *current_arm == Some(TryTagArms::Except)
+                {
+                    return Err(ExecutionError::UnexpectedOpeningTag(
+                        String::from_utf8(e.to_vec()).unwrap(),
+                    ));
+                }
+                *current_arm = Some(TryTagArms::Attempt);
+                do_parse(reader, callback, attempt_events, depth, current_arm, tags)?;
+            }
+
+            // Handle <esi:except> tags in recursion
+            Ok(XmlEvent::Start(ref e)) if e.name() == QName(&tags.esi_except) => {
+                if *current_arm == Some(TryTagArms::Attempt)
+                    || *current_arm == Some(TryTagArms::Except)
+                {
+                    return Err(ExecutionError::UnexpectedOpeningTag(
+                        String::from_utf8(e.to_vec()).unwrap(),
+                    ));
+                }
+                *current_arm = Some(TryTagArms::Except);
+                do_parse(reader, callback, except_events, depth, current_arm, tags)?;
+            }
+
+            Ok(XmlEvent::End(ref e)) if e.name() == QName(&tags.tryy) => {
+                *current_arm = None;
+                if *depth == 0 {
+                    return Err(ExecutionError::UnexpectedClosingTag(
+                        String::from_utf8(e.to_vec()).unwrap(),
+                    ));
+                }
+                if *depth == 1 {
+                    callback(Event::ESI(Tag::Try {
+                        attempt_events: std::mem::take(attempt_events),
+                        except_events: std::mem::take(except_events),
+                    }))?;
+                    *depth = 0;
+                    continue;
+                }
+                *depth -= 1;
+                task.push(Event::ESI(Tag::Try {
+                    attempt_events: std::mem::take(attempt_events),
+                    except_events: std::mem::take(except_events),
+                }));
+                continue;
+            }
+
+            Ok(XmlEvent::End(ref e)) if e.name() == QName(&tags.attempt) => {
+                *current_arm = None;
+                if *depth == 0 {
+                    return Err(ExecutionError::UnexpectedClosingTag(
+                        String::from_utf8(e.to_vec()).unwrap(),
+                    ));
+                }
+                return Ok(());
+            }
+
+            Ok(XmlEvent::End(ref e)) if e.name() == QName(&tags.esi_except) => {
+                *current_arm = None;
+                if *depth == 0 {
+                    return Err(ExecutionError::UnexpectedClosingTag(
+                        String::from_utf8(e.to_vec()).unwrap(),
+                    ));
+                }
+                return Ok(());
             }
 
             Ok(XmlEvent::Eof) => {
                 debug!("End of document");
                 break;
             }
-            Ok(e) => callback(Event::XML(e.into_owned()))?,
+            Ok(e) => {
+                if *depth == 0 {
+                    callback(Event::XML(e.into_owned()))?;
+                } else {
+                    task.push(Event::XML(e.into_owned()));
+                }
+            }
             _ => {}
         }
     }
+    Ok(())
+}
+
+/// Parses the ESI document from the given `reader` and calls the `callback` closure upon each successfully parsed ESI tag.
+pub fn parse_tags<'a, R>(
+    namespace: &str,
+    reader: &mut Reader<R>,
+    callback: &mut dyn FnMut(Event<'a>) -> Result<()>,
+) -> Result<()>
+where
+    R: BufRead,
+{
+    debug!("Parsing document...");
+
+    // Initialize the ESI tags
+    let tags = EsiTags::init(namespace);
+    // set the initial depth of nested tags
+    let mut depth = 0;
+    let mut root = Vec::new();
+
+    let mut current_arm: Option<TryTagArms> = None;
+
+    do_parse(
+        reader,
+        callback,
+        &mut root,
+        &mut depth,
+        &mut current_arm,
+        &tags,
+    )?;
+    debug!("Root: {:?}", root);
 
     Ok(())
 }
@@ -157,131 +293,4 @@ fn parse_include<'a>(elem: &BytesStart) -> Result<Tag<'a>> {
         alt,
         continue_on_error,
     })
-}
-
-fn parse_try<'a, R>(
-    reader: &mut Reader<R>,
-    callback: &mut dyn FnMut(Event<'a>) -> Result<()>,
-    esi_include: &[u8],
-    esi_attempt: &[u8],
-    esi_except: &[u8],
-    esi_try: &[u8],
-) -> Result<()>
-where
-    R: BufRead,
-{
-    #[derive(Debug, PartialEq)]
-    enum TryNestedTag {
-        Attempt,
-        Except,
-    }
-    let mut inside_tag: Option<TryNestedTag> = None;
-
-    let mut buf = Vec::new();
-    let mut attempt_events = Vec::new();
-    let mut except_events = Vec::new();
-    let mut attempt_found = false;
-    let mut except_found = false;
-    let mut open_include = false;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(XmlEvent::Start(ref e)) if e.name() == QName(esi_attempt) => {
-                if inside_tag.is_some() || attempt_found {
-                    return Err(ExecutionError::UnexpectedOpeningTag(
-                        String::from_utf8(e.to_vec()).unwrap(),
-                    ));
-                }
-                inside_tag = Some(TryNestedTag::Attempt);
-                attempt_found = true;
-            }
-            Ok(XmlEvent::Start(ref e)) if e.name() == QName(esi_except) => {
-                if !attempt_found || inside_tag.is_some() || except_found {
-                    return Err(ExecutionError::UnexpectedOpeningTag(
-                        String::from_utf8(e.to_vec()).unwrap(),
-                    ));
-                }
-                inside_tag = Some(TryNestedTag::Except);
-                except_found = true;
-            }
-            // Handle <esi:include> tags, and ignore the contents if they are not self-closing
-            Ok(XmlEvent::Start(elem)) if elem.name().into_inner().starts_with(esi_include) => {
-                let tag = parse_include(&elem)?;
-                match inside_tag {
-                    Some(TryNestedTag::Attempt) => attempt_events.push(Event::ESI(tag)),
-                    Some(TryNestedTag::Except) => except_events.push(Event::ESI(tag)),
-                    _ => (),
-                }
-                open_include = true;
-            }
-
-            Ok(XmlEvent::Empty(elem)) if elem.name().into_inner().starts_with(esi_include) => {
-                let tag = parse_include(&elem)?;
-                match inside_tag {
-                    Some(TryNestedTag::Attempt) => attempt_events.push(Event::ESI(tag)),
-                    Some(TryNestedTag::Except) => except_events.push(Event::ESI(tag)),
-                    _ => (),
-                }
-            }
-
-            Ok(XmlEvent::End(elem)) if elem.name().into_inner().starts_with(esi_include) => {
-                if !open_include {
-                    return Err(ExecutionError::UnexpectedClosingTag(
-                        String::from_utf8(elem.to_vec()).unwrap(),
-                    ));
-                }
-
-                open_include = false;
-            }
-            Ok(XmlEvent::End(ref e)) if e.name() == QName(esi_attempt) => {
-                inside_tag = None;
-            }
-            Ok(XmlEvent::End(ref e)) if e.name() == QName(esi_except) => {
-                inside_tag = None;
-            }
-            Ok(XmlEvent::End(ref e)) if e.name() == QName(esi_try) => {
-                if !attempt_found {
-                    return Err(ExecutionError::UnexpectedClosingTag(
-                        String::from_utf8(e.to_vec()).unwrap(),
-                    ));
-                }
-                callback(Event::ESI(Tag::Try {
-                    attempt_events,
-                    except_events,
-                }))?;
-                break;
-            }
-            Ok(XmlEvent::Text(txt)) => {
-                if inside_tag.is_none() {
-                    // no inner content allowed outside `esi:attempt` or `esi:exempt` tags
-                    continue;
-                }
-                match inside_tag {
-                    Some(TryNestedTag::Attempt) => {
-                        attempt_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
-                        attempt_found = true;
-                    }
-                    Some(TryNestedTag::Except) => {
-                        except_events.push(Event::XML(XmlEvent::Text(txt.into_owned())));
-                        except_found = true;
-                    }
-                    _ => (),
-                }
-            }
-            Ok(event) if inside_tag == Some(TryNestedTag::Attempt) => {
-                attempt_events.push(Event::XML(event.into_owned()));
-            }
-            Ok(event) if inside_tag == Some(TryNestedTag::Except) => {
-                except_events.push(Event::XML(event.into_owned()));
-            }
-            Ok(event) => {
-                callback(Event::XML(event.into_owned()))?;
-            }
-            Err(err) => return Err(err.into()),
-        }
-
-        buf.clear();
-    }
-
-    Ok(())
 }

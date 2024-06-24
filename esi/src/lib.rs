@@ -5,8 +5,8 @@ mod document;
 mod error;
 mod parse;
 
-use document::{Chunk, PollTaskState, Task};
-use fastly::http::request::{PendingRequest, PollResult};
+use document::{PollTaskState, Task};
+use fastly::http::request::PendingRequest;
 use fastly::http::{header, Method, StatusCode, Url};
 use fastly::{mime, Body, Request, Response};
 use log::{debug, error, trace};
@@ -186,7 +186,6 @@ impl Processor {
                         }
                     }
                 }
-
                 Ok(())
             },
         )?;
@@ -240,7 +239,7 @@ fn parse_task(
                 send_fragment_request(req?, alt_req, *continue_on_error, dispatch_fragment_request)?
             {
                 // build up task list with fragments
-                task.queue.push_back(Chunk::Include(fragment));
+                task.queue.push_back(Element::Include(fragment));
             }
         }
         if let Event::XML(event) = event {
@@ -252,7 +251,7 @@ fn parse_task(
             let mut vec = Vec::new();
             let mut writer = Writer::new(&mut vec);
             writer.write_event(event)?;
-            task.queue.push_back(Chunk::Raw(vec));
+            task.queue.push_back(Element::Raw(vec));
         }
     }
     Ok(task)
@@ -418,11 +417,11 @@ fn poll_elements(
 
                 match (attempt_state, except_state) {
                     (PollTaskState::Succeeded, _) => {
-                        output_handler(output_writer, &attempt_task.output);
+                        output_handler(output_writer, &attempt_task.output.into_inner());
                         continue;
                     }
                     (PollTaskState::Failed(_, _), PollTaskState::Succeeded) => {
-                        output_handler(output_writer, &except_task.output);
+                        output_handler(output_writer, &except_task.output.into_inner());
                         continue;
                     }
                     (PollTaskState::Failed(req, res), PollTaskState::Failed(_req, _res)) => {
@@ -458,22 +457,35 @@ fn poll_tasks(
         debug!("The task has previously failed, returning failed status");
         return Ok(task.status.clone());
     }
-    // loop over chunks of the task
-    loop {
-        let Some(piece) = task.queue.pop_front() else {
-            // no more chunks, return success
-            return Ok(PollTaskState::Succeeded);
-        };
-
-        let (mut request, alt, continue_on_error, pending_request) = match piece {
-            Chunk::Include(Fragment {
+    // loop over elements of the task
+    while let Some(element) = task.queue.pop_front() {
+        let (mut request, alt, continue_on_error, pending_request) = match element {
+            Element::Include(Fragment {
                 request,
                 alt,
                 continue_on_error,
                 pending_request,
             }) => (request, alt, continue_on_error, pending_request),
-            Chunk::Raw(raw) => {
-                task.output.extend_from_slice(&raw);
+            Element::Raw(raw) => {
+                task.output.get_mut().extend_from_slice(&raw);
+                continue;
+            }
+            Element::Try {
+                attempt_task,
+                except_task,
+            } => {
+                let mut nested_try = VecDeque::from(vec![Element::Try {
+                    attempt_task,
+                    except_task,
+                }]);
+
+                poll_elements(
+                    &mut nested_try,
+                    &mut task.output,
+                    dispatch_fragment_request,
+                    process_fragment_response,
+                )?;
+
                 continue;
             }
         };
@@ -492,7 +504,9 @@ fn poll_tasks(
                         request.get_url_str(),
                         res.get_status()
                     );
-                    task.output.extend_from_slice(&res.into_body_bytes());
+                    task.output
+                        .get_mut()
+                        .extend_from_slice(&res.into_body_bytes());
                     continue;
                 }
                 // Response status is NOT success, either continue, fallback to an alt, or fail.
@@ -505,7 +519,7 @@ fn poll_tasks(
                         dispatch_fragment_request,
                     )? {
                         // push the request back to front with ALT as the request
-                        task.queue.push_front(Chunk::Include(fragment));
+                        task.queue.push_front(Element::Include(fragment));
                         return Ok(PollTaskState::Pending);
                     }
                     debug!("guest returned None, continuing");
@@ -522,6 +536,8 @@ fn poll_tasks(
             Err(err) => return Err(ExecutionError::RequestError(err)),
         }
     }
+    // no more elements, return success
+    Ok(PollTaskState::Succeeded)
 }
 
 // Helper function to create an XML reader from a body.
