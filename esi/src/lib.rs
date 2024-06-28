@@ -10,7 +10,6 @@ use fastly::http::request::PendingRequest;
 use fastly::http::{header, Method, StatusCode, Url};
 use fastly::{mime, Body, Request, Response};
 use log::{debug, error, trace};
-use quick_xml::{Reader, Writer};
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
 
@@ -20,6 +19,9 @@ pub use crate::parse::{parse_tags, Event, Include, Tag, Tag::Try};
 
 pub use crate::config::Configuration;
 pub use crate::error::ExecutionError;
+
+// re-export quick_xml Reader and Writer
+pub use quick_xml::{Reader, Writer};
 
 type FragmentRequestDispatcher = dyn Fn(Request) -> Result<Option<PendingRequest>>;
 

@@ -1,8 +1,8 @@
 use std::io::Write;
 
+use esi::{Reader, Writer};
 use fastly::{http::StatusCode, mime, Request, Response};
 use log::{error, info};
-use quick_xml::{Reader, Writer};
 
 fn main() {
     env_logger::builder()
