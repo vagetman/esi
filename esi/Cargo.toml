@@ -1,11 +1,11 @@
 [package]
 name = "esi"
-version = "0.4.1"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 description = "A streaming parser and executor for Edge Side Includes"
 repository = "https://github.com/fastly/esi"
-license = "MIT"
-authors = ["Kailan Blanks <kblanks@fastly.com>"]
-edition = "2018"
 readme = "./README.md"
 
 [dependencies]

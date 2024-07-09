@@ -5,3 +5,9 @@ members = [
     "examples/esi_example_minimal",
     "examples/esi_example_advanced_error_handling"
 ]
+
+[workspace.package]
+version = "4.1.0"
+authors = ["Kailan Blanks <kblanks@fastly.com>"]
+license = "MIT"
+edition = "2018"
