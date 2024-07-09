@@ -106,7 +106,7 @@ where
     Ok(())
 }
 
-fn parse_include<'a, 'b>(elem: &'a BytesStart) -> Result<Event<'b>> {
+fn parse_include<'a>(elem: &BytesStart) -> Result<Event<'a>> {
     let src = match elem
         .attributes()
         .flatten()
