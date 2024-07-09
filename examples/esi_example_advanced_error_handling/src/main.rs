@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use fastly::{http::StatusCode, mime, Request, Response};
 use log::{error, info};
 use quick_xml::{Reader, Writer};
@@ -36,7 +38,8 @@ fn main() {
         // Set up an XML writer to write directly to the client output stream.
         let mut xml_writer = Writer::new(output_writer);
 
-        match processor.process_document(
+        // Process the ESI document
+        let result = processor.process_document(
             Reader::from_reader(beresp.take_body()),
             &mut xml_writer,
             Some(&|req| {
@@ -51,15 +54,18 @@ fn main() {
                 );
                 Ok(resp)
             }),
-        ) {
+        );
+
+        match result {
             Ok(()) => {
                 xml_writer.into_inner().finish().unwrap();
             }
             Err(err) => {
                 error!("error processing ESI document: {}", err);
                 xml_writer
-                    .inner()
-                    .write_str(include_str!("error.html.fragment"));
+                    .get_mut()
+                    .write_all(include_bytes!("error.html.fragment"))
+                    .expect("failed to write error response");
                 xml_writer.into_inner().finish().unwrap_or_else(|_| {
                     error!("error flushing error response to client");
                 });
