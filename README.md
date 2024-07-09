@@ -77,4 +77,4 @@ See example applications in the [`examples`](./examples) subdirectory or read th
 
 ## License
 
-The source and documentation for this project are released under the [MIT License](LICENSE).
+The source and documentation for this project are released under the [MIT License](./LICENSE).
