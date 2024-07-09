@@ -14,6 +14,7 @@ service_id = ""
 
     [local_server.backends.mock-s3]
       url = "https://mock-s3.edgecompute.app"
+      override_host = "mock-s3.edgecompute.app"
 
 [scripts]
   build = "cargo build --bin esi_example_minimal --release --target wasm32-wasi --color always"
