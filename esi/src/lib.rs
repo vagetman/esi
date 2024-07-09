@@ -144,7 +144,7 @@ impl Processor {
                             debug!("nothing waiting so streaming directly to client");
                             output_writer.write_event(event)?;
                             output_writer
-                                .inner()
+                                .get_mut()
                                 .flush()
                                 .expect("failed to flush output");
                         } else {
@@ -262,7 +262,7 @@ fn poll_elements(
             match element {
                 Element::Raw(raw) => {
                     debug!("writing previously queued other content");
-                    output_writer.inner().write_all(&raw).unwrap();
+                    output_writer.get_mut().write_all(&raw).unwrap();
                 }
                 Element::Fragment(mut request, alt, continue_on_error, pending_request) => {
                     match pending_request.wait() {
@@ -305,11 +305,11 @@ fn poll_elements(
                                 // Response status is success,
                                 // write the response body to the output stream.
                                 output_writer
-                                    .inner()
+                                    .get_mut()
                                     .write_all(&res.into_body_bytes())
                                     .unwrap();
                                 output_writer
-                                    .inner()
+                                    .get_mut()
                                     .flush()
                                     .expect("failed to flush output");
                             }
@@ -331,7 +331,7 @@ fn reader_from_body(body: Body) -> Reader<Body> {
     let mut reader = Reader::from_reader(body);
 
     // TODO: make this configurable
-    reader.check_end_names(false);
+    reader.config_mut().check_end_names = false;
 
     reader
 }
