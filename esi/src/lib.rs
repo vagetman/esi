@@ -262,7 +262,6 @@ fn process_include(
             return Ok(FetchState::Succeeded);
         } else if continue_on_error {
             debug!("request poll DONE ERROR, NO ALT, continuing");
-            // continue;
             return Ok(FetchState::Succeeded);
         }
 
