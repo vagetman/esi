@@ -3,7 +3,9 @@
 mod config;
 mod document;
 mod error;
+pub mod esi_dollar_structs;
 mod parse;
+mod vars;
 
 use document::{FetchState, Task};
 use fastly::http::request::PendingRequest;
@@ -12,6 +14,7 @@ use fastly::{mime, Body, Request, Response};
 use log::{debug, error, trace};
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
+use vars::resolve_vars;
 
 pub use crate::document::{Element, Fragment};
 pub use crate::error::Result;
@@ -19,6 +22,7 @@ pub use crate::parse::{parse_tags, Event, Include, Tag, Tag::Try};
 
 pub use crate::config::Configuration;
 pub use crate::error::ExecutionError;
+use crate::esi_dollar_structs::EsiData;
 
 // re-export quick_xml Reader and Writer
 pub use quick_xml::{Reader, Writer};
@@ -369,16 +373,18 @@ fn event_receiver(
 
     match event {
         Event::ESI(Tag::Include {
-            src,
+            mut src,
             alt,
             continue_on_error,
         }) => {
+            let src = resolve_vars(&mut src, original_request_metadata)?;
             let req = build_fragment_request(
                 original_request_metadata.clone_without_body(),
                 &src,
                 is_escaped,
             );
-            let alt_req = alt.map(|alt| {
+            let alt_req = alt.map(|mut alt| {
+                let alt = resolve_vars(&mut alt, original_request_metadata)?;
                 build_fragment_request(
                     original_request_metadata.clone_without_body(),
                     &alt,
