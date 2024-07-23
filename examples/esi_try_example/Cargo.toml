@@ -1,10 +1,5 @@
 [package]
 name = "esi_try_example"
-version = "0.1.0"
-authors = []
-edition = "2018"
-# Remove this line if you want to be able to publish this crate as open source on crates.io.
-# Otherwise, `publish = false` prevents an accidental `cargo publish` from revealing private source.
 version.workspace = true
 authors.workspace = true
 license.workspace = true

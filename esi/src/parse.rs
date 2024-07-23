@@ -48,7 +48,7 @@ struct EsiTags {
     include: Vec<u8>,
     comment: Vec<u8>,
     remove: Vec<u8>,
-    tryy: Vec<u8>,
+    r#try: Vec<u8>,
     attempt: Vec<u8>,
     except: Vec<u8>,
 }
@@ -58,7 +58,7 @@ impl EsiTags {
             include: format!("{namespace}:include",).into_bytes(),
             comment: format!("{namespace}:comment",).into_bytes(),
             remove: format!("{namespace}:remove",).into_bytes(),
-            tryy: format!("{namespace}:try",).into_bytes(),
+            r#try: format!("{namespace}:try",).into_bytes(),
             attempt: format!("{namespace}:attempt",).into_bytes(),
             except: format!("{namespace}:except",).into_bytes(),
         }
@@ -124,7 +124,7 @@ where
             Ok(XmlEvent::Empty(e)) if e.name().into_inner().starts_with(&tag.comment) => continue,
 
             // Handle <esi:try> tags
-            Ok(XmlEvent::Start(ref e)) if e.name() == QName(&tag.tryy) => {
+            Ok(XmlEvent::Start(ref e)) if e.name() == QName(&tag.r#try) => {
                 *current_arm = Some(TryTagArms::Try);
                 *depth += 1;
                 continue;
@@ -146,7 +146,7 @@ where
                 }
             }
 
-            Ok(XmlEvent::End(ref e)) if e.name() == QName(&tag.tryy) => {
+            Ok(XmlEvent::End(ref e)) if e.name() == QName(&tag.r#try) => {
                 *current_arm = None;
                 if *depth == 0 {
                     return unexpected_closing_tag_error(e);
