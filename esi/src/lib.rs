@@ -113,7 +113,7 @@ impl Processor {
         // `root_task` is the root task that will be used to fetch tags in recursive manner
         let root_task = &mut Task::new();
 
-        let is_escaped = self.configuration.is_escaped;
+        let is_escaped = self.configuration.is_escaped_content;
         // Call the library to parse fn `parse_tags` which will call the callback function
         // on each tag / event it finds in the document.
         // The callback function `handle_events` will handle the event.

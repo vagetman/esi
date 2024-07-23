@@ -10,15 +10,15 @@
 pub struct Configuration {
     /// The XML namespace to use when scanning for ESI tags. Defaults to `esi`.
     pub namespace: String,
-    /// Disables URL unescaping, only good with non-HTML content, eg JSON
-    pub is_escaped: bool,
+    /// For working with non-HTML ESI templates, e.g. JSON files, this option allows you to disable the unescaping of URLs
+    pub is_escaped_content: bool,
 }
 
 impl Default for Configuration {
     fn default() -> Self {
         Self {
             namespace: String::from("esi"),
-            is_escaped: true,
+            is_escaped_content: true,
         }
     }
 }
@@ -33,7 +33,7 @@ impl Configuration {
     }
     /// For working with non-HTML ESI templates, eg JSON files, allows to disable URLs unescaping
     pub fn with_escaped(mut self, is_escaped: impl Into<bool>) -> Self {
-        self.is_escaped = is_escaped.into();
+        self.is_escaped_content = is_escaped.into();
         self
     }
 }

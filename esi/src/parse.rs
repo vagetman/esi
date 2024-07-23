@@ -44,7 +44,7 @@ pub enum Event<'e> {
 }
 
 // #[derive(Debug)]
-struct EsiTags {
+struct TagNames {
     include: Vec<u8>,
     comment: Vec<u8>,
     remove: Vec<u8>,
@@ -52,7 +52,7 @@ struct EsiTags {
     attempt: Vec<u8>,
     except: Vec<u8>,
 }
-impl EsiTags {
+impl TagNames {
     fn init(namespace: &str) -> Self {
         Self {
             include: format!("{namespace}:include",).into_bytes(),
@@ -71,7 +71,7 @@ fn do_parse<'a, R>(
     task: &mut Vec<Event<'a>>,
     depth: &mut usize,
     current_arm: &mut Option<TryTagArms>,
-    tag: &EsiTags,
+    tag: &TagNames,
 ) -> Result<()>
 where
     R: BufRead,
@@ -195,7 +195,7 @@ where
     debug!("Parsing document...");
 
     // Initialize the ESI tags
-    let tags = EsiTags::init(namespace);
+    let tags = TagNames::init(namespace);
     // set the initial depth of nested tags
     let mut depth = 0;
     let mut root = Vec::new();
