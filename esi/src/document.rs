@@ -76,7 +76,7 @@ impl std::fmt::Debug for Element {
         match self {
             Self::Raw(_) => write!(f, "Raw"),
             Self::Include(Fragment { alt: Some(_), .. }) => {
-                write!(f, "Incldude Fragment(with alt)")
+                write!(f, "Include Fragment(with alt)")
             }
             Self::Include(Fragment { .. }) => write!(f, "Include Fragment"),
             Self::Try {
