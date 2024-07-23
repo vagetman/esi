@@ -10,4 +10,4 @@ publish = false
 fastly = "^0.10"
 esi = { path = "../../esi" }
 log = "^0.4"
-env_logger = "^0.11"         # 0.10.0 requires nightly
+env_logger = "^0.11"
