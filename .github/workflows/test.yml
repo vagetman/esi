@@ -19,6 +19,9 @@ jobs:
       - name: Check source
         run: cargo check
         shell: bash
+      - name: Install Compute local testing server
+        run: cargo install viceroy
+        shell: bash
       - name: Run tests
         run: cargo test
         shell: bash
