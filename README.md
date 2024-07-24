@@ -5,6 +5,7 @@ This crate provides a streaming Edge Side Includes parser and executor designed 
 The implementation is a subset of the [ESI Language Specification 1.0](https://www.w3.org/TR/esi-lang/) supporting the following tags:
 
 - `<esi:include>` (+ `alt`, `onerror="continue"`)
+- `<esi:try>` | `<esi:attempt>` | `<esi:except>`
 - `<esi:comment>`
 - `<esi:remove>`
 
@@ -82,6 +83,7 @@ In order to run the test suite for the packages in this repository, [`viceroy`](
 ```sh
 cargo install viceroy
 ```
+
 ## License
 
 The source and documentation for this project are released under the [MIT License](./LICENSE).
