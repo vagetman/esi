@@ -1,0 +1,27 @@
+# This file describes a Fastly Compute package. To learn more visit:
+# https://www.fastly.com/documentation/reference/compute/fastly-toml
+
+authors = ["vagetman@gmail.com"]
+description = ""
+language = "rust"
+manifest_version = 3
+name = "esi-test"
+
+[local_server]
+
+  [local_server.backends]
+
+    [local_server.backends.mock-s3]
+      override_host = "orange-cool-farm.glitch.me"
+      url = "https://orange-cool-farm.glitch.me/"
+
+[scripts]
+build = "cargo build --bin esi_try_example --release --target wasm32-wasi --color always"
+
+[setup]
+
+  [setup.backends]
+
+    [setup.backends.mock-s3]
+      address = "orange-cool-farm.glitch.me"
+      port = 443

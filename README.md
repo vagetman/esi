@@ -75,6 +75,13 @@ fn handle_request(req: Request) -> Result<(), Error> {
 
 See example applications in the [`examples`](./examples) subdirectory or read the hosted documentation at [docs.rs/esi](https://docs.rs/esi). Due to the fact that this processor streams fragments to the client as soon as they are available, it is not possible to return a relevant status code for later errors once we have started streaming the response to the client. For this reason, it is recommended that you refer to the [`esi_example_advanced_error_handling`](./examples/esi_example_advanced_error_handling) application, which allows you to handle errors gracefully by maintaining ownership of the output stream.
 
+## Testing
+
+In order to run the test suite for the packages in this repository, [`viceroy`](https://github.com/fastly/Viceroy) must be available in your PATH. You can install the latest version of `viceroy` by running the following command:
+
+```sh
+cargo install viceroy
+```
 ## License
 
 The source and documentation for this project are released under the [MIT License](./LICENSE).

@@ -3,6 +3,7 @@ use log::info;
 
 fn main() {
     env_logger::builder()
+        .format_timestamp_millis()
         .filter(None, log::LevelFilter::Trace)
         .init();
 
@@ -40,16 +41,13 @@ fn handle_request(req: Request) -> Result<(), Error> {
                 info!("Sending request {} {}", req.get_method(), req.get_path());
                 Ok(Some(req.with_ttl(120).send_async("mock-s3")?))
             }),
-            Some(&|req, mut resp| {
+            Some(&|req, resp| {
                 info!(
-                    "Received response for {} {}",
+                    "Received response for {} {} - {}",
                     req.get_method(),
-                    req.get_path()
+                    req.get_url(),
+                    resp.get_status()
                 );
-                if !resp.get_status().is_success() {
-                    // Override status so we still insert errors.
-                    resp.set_status(StatusCode::OK);
-                }
                 Ok(resp)
             }),
         )?;
