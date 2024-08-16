@@ -1,14 +1,19 @@
 #![allow(unused)]
+use std::f32::consts::E;
+
 use fastly::Request;
 use log::{debug, error, trace};
 
 use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take_till, take_until, take_while, take_while1};
+use nom::bytes::complete::{
+    is_not, tag, take_till, take_until, take_until1, take_while, take_while1,
+};
 use nom::character::complete::{char, none_of, space0};
+use nom::character::is_space;
 use nom::combinator::{complete, eof, map, opt, peek, value};
-use nom::multi::{many0, many1, many_till};
+use nom::multi::{many0, many1, many_till, separated_list0, separated_list1};
 use nom::sequence::{delimited, pair, preceded, separated_pair, tuple};
-use nom::IResult;
+use nom::{Err, IResult};
 
 use crate::error::Result;
 use crate::esi_dollar_structs::EsiData;
@@ -61,15 +66,16 @@ fn parse_vars<'a>(input: &'a str, req: &'a Request) -> IResult<&'a str, String> 
     )(input)
 }
 
+fn parse_quoted_string(input: &str) -> IResult<&str, &str> {
+    delimited(tag("\'"), take_until("\'"), tag("\'"))(input)
+}
+
+fn not_space(input: &str) -> IResult<&str, &str> {
+    take_while1(|c: char| !c.is_whitespace() && c != '}')(input)
+}
+
 fn parse_params(input: &str) -> IResult<&str, &str> {
-    map(
-        tuple((
-            space0,
-            tag("{"),
-            delimited(tag("{"), take_until("}"), tag("}")),
-        )),
-        |(_, _, params)| params,
-    )(input)
+    delimited(tag("{"), separated_list0(tag(","), f) alt((parse_quoted_string, not_space)), tag("}"))(input)
 }
 
 fn parse_var_with_params(input: &str) -> IResult<&str, &str> {
@@ -103,6 +109,67 @@ fn esi_variable_name(i: &str) -> IResult<&str, &str> {
 fn esi_function_name(i: &str) -> IResult<&str, &str> {
     take_while1(move |c: char| c.is_ascii_lowercase() || c == '_')(i)
 }
+
+#[cfg(test)]
+#[test]
+fn test_not_space() {
+    use nom::error::ErrorKind;
+    let input = "foo";
+    let result = not_space(input);
+    assert_eq!(result, Ok(("", "foo")));
+
+    let input = "foo}";
+    let result = not_space(input);
+    assert_eq!(result, Ok(("}", "foo")));
+
+    let input = "foo bar";
+    let result = not_space(input);
+    assert_eq!(result, Ok((" bar", "foo")));
+
+    let input = " foo";
+    let result = not_space(input);
+    assert_eq!(
+        result,
+        Err(nom::Err::Error(nom::error::Error::new(
+            " foo",
+            ErrorKind::TakeWhile1
+        )))
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn parse_quoted_string_test() {
+    let input = "'foo'";
+    let result = parse_quoted_string(input);
+    assert_eq!(result, Ok(("", "foo")));
+
+    let input = "'foo bar'";
+    let result = parse_quoted_string(input);
+    assert_eq!(result, Ok(("", "foo bar")));
+}
+#[test]
+fn test_parse_params() {
+    use nom::error::ErrorKind;
+    let input = "{foo}";
+    let result = parse_params(input);
+    assert_eq!(result, Ok(("", "foo")));
+
+    let input = "{'foo'}";
+    let result = parse_params(input);
+    assert_eq!(result, Ok(("", "foo")));
+
+    let input = "{foo bar}";
+    let result = parse_params(input);
+    assert_eq!(
+        result,
+        Err(nom::Err::Error(nom::error::Error::new(
+            " bar}",
+            ErrorKind::Tag
+        )))
+    );
+}
+
 
 #[cfg(test)]
 #[test]
