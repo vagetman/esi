@@ -49,9 +49,9 @@ impl From<Response> for PendingFragmentContent {
 impl PendingFragmentContent {
     fn wait_for_content(self) -> Result<Response> {
         Ok(match self {
-            PendingFragmentContent::PendingRequest(pending_request) => pending_request.wait()?,
-            PendingFragmentContent::CompletedRequest(response) => response,
-            PendingFragmentContent::NoContent => Response::from_status(StatusCode::NO_CONTENT),
+            Self::PendingRequest(pending_request) => pending_request.wait()?,
+            Self::CompletedRequest(response) => response,
+            Self::NoContent => Response::from_status(StatusCode::NO_CONTENT),
         })
     }
 }
