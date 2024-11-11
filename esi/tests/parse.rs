@@ -1,4 +1,5 @@
 use esi::{parse_tags, Event, ExecutionError, Tag};
+use fastly::{http::Method, Request};
 use quick_xml::Reader;
 
 use std::sync::Once;
@@ -16,8 +17,9 @@ fn parse_basic_include() -> Result<(), ExecutionError> {
 
     let input = "<html><body><esi:include src=\"https://example.com/hello\"/></body></html>";
     let mut parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         if let Event::ESI(Tag::Include {
             src,
             alt,
@@ -43,8 +45,9 @@ fn parse_advanced_include_with_namespace() -> Result<(), ExecutionError> {
 
     let input = "<app:include src=\"abc\" alt=\"def\" onerror=\"continue\"/>";
     let mut parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("app", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("app", &req, &mut Reader::from_str(input), &mut |event| {
         if let Event::ESI(Tag::Include {
             src,
             alt,
@@ -70,8 +73,9 @@ fn parse_open_include() -> Result<(), ExecutionError> {
 
     let input = "<esi:include src=\"abc\" alt=\"def\" onerror=\"continue\"></esi:include>";
     let mut parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         if let Event::ESI(Tag::Include {
             src,
             alt,
@@ -96,8 +100,9 @@ fn parse_invalid_include() -> Result<(), ExecutionError> {
     setup();
 
     let input = "<esi:include/>";
+    let req = Request::new(Method::GET, "https://example.com");
 
-    let res = parse_tags("esi", &mut Reader::from_str(input), &mut |_| Ok(()));
+    let res = parse_tags("esi", &req, &mut Reader::from_str(input), &mut |_| Ok(()));
 
     assert!(matches!(
         res,
@@ -113,8 +118,9 @@ fn parse_basic_include_with_onerror() -> Result<(), ExecutionError> {
 
     let input = "<esi:include src=\"/_fragments/content.html\" onerror=\"continue\"/>";
     let mut parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         if let Event::ESI(Tag::Include {
             src,
             alt,
@@ -141,8 +147,9 @@ fn parse_try_accept_only_include() -> Result<(), ExecutionError> {
 
     let input = "<esi:try><esi:attempt><esi:include src=\"abc\" alt=\"def\" onerror=\"continue\"/></esi:attempt></esi:try>";
     let mut parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         if let Event::ESI(Tag::Include {
             src,
             alt,
@@ -180,8 +187,9 @@ fn parse_try_accept_except_include() -> Result<(), ExecutionError> {
     let mut plain_include_parsed = false;
     let mut accept_include_parsed = false;
     let mut except_include_parsed = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         println!("Event - {event:?}");
         if let Event::ESI(Tag::Include {
             ref src,
@@ -265,8 +273,9 @@ fn parse_try_nested() -> Result<(), ExecutionError> {
     let mut except_include_parsed_level1 = false;
     let mut accept_include_parsed_level2 = false;
     let mut except_include_parsed_level2 = false;
+    let req = Request::new(Method::GET, "https://example.com");
 
-    parse_tags("esi", &mut Reader::from_str(input), &mut |event| {
+    parse_tags("esi", &req, &mut Reader::from_str(input), &mut |event| {
         assert_eq!(
             format!("{event:?}"),
             r#"ESI(Try { attempt_events: [XML(Text(BytesText { content: Owned("0xA        ") })), ESI(Include { src: "/abc", alt: None, continue_on_error: false }), XML(Text(BytesText { content: Owned("0xA        ") })), XML(Text(BytesText { content: Owned("0xA            ") })), XML(Text(BytesText { content: Owned("0xA                ") })), XML(Text(BytesText { content: Owned("0xA        ") })), ESI(Try { attempt_events: [XML(Text(BytesText { content: Owned("0xA                ") })), ESI(Include { src: "/foo", alt: None, continue_on_error: false }), XML(Text(BytesText { content: Owned("0xA            ") }))], except_events: [XML(Text(BytesText { content: Owned("0xA                ") })), ESI(Include { src: "/bar", alt: None, continue_on_error: false }), XML(Text(BytesText { content: Owned("0xA                ") }))] }), XML(Text(BytesText { content: Owned("0xA    ") }))], except_events: [XML(Text(BytesText { content: Owned("0xA        ") })), ESI(Include { src: "/xyz", alt: None, continue_on_error: false }), XML(Text(BytesText { content: Owned("0xA        ") })), XML(Empty(BytesStart { buf: Owned("a href=\"/efg\""), name_len: 1 })), XML(Text(BytesText { content: Owned("0xA        just text0xA    ") }))] })"#

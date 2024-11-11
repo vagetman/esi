@@ -16,7 +16,7 @@ name = "esi-test"
       url = "https://orange-cool-farm.glitch.me/"
 
 [scripts]
-build = "cargo build --bin esi_try_example --release --target wasm32-wasi --color always"
+build = "cargo build --bin esi_try_example --release --target wasm32-wasip1 --color always"
 
 [setup]
 

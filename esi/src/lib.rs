@@ -4,6 +4,7 @@ mod config;
 mod document;
 mod error;
 mod parse;
+mod symbols;
 
 use document::{FetchState, Task};
 use fastly::http::request::PendingRequest;
@@ -22,6 +23,10 @@ pub use crate::error::ExecutionError;
 
 // re-export quick_xml Reader and Writer
 pub use quick_xml::{Reader, Writer};
+
+// pub use crate::symbols::{
+//     Symbol, {process_symbols, tokenize_symbols},
+// };
 
 type FragmentRequestDispatcher = dyn Fn(Request) -> Result<PendingFragmentContent>;
 
@@ -148,6 +153,7 @@ impl Processor {
         // The callback function `handle_events` will handle the event.
         parse_tags(
             &self.configuration.namespace,
+            &original_request_metadata,
             &mut src_document,
             &mut |event| {
                 event_receiver(

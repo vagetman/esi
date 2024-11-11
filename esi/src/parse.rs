@@ -1,4 +1,6 @@
+use crate::symbols::process_symbols;
 use crate::{ExecutionError, Result};
+use fastly::Request;
 use log::debug;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use quick_xml::name::QName;
@@ -66,6 +68,7 @@ impl TagNames {
 }
 
 fn do_parse<'a, R>(
+    req: &Request,
     reader: &mut Reader<R>,
     callback: &mut dyn FnMut(Event<'a>) -> Result<()>,
     task: &mut Vec<Event<'a>>,
@@ -102,12 +105,12 @@ where
 
             // Handle <esi:include> tags, and ignore the contents if they are not self-closing
             Ok(XmlEvent::Empty(e)) if e.name().into_inner().starts_with(&tag.include) => {
-                include_tag_handler(&e, callback, task, *depth)?;
+                include_tag_handler(req, &e, callback, task, *depth)?;
             }
 
             Ok(XmlEvent::Start(e)) if e.name().into_inner().starts_with(&tag.include) => {
                 open_include = true;
-                include_tag_handler(&e, callback, task, *depth)?;
+                include_tag_handler(req, &e, callback, task, *depth)?;
             }
 
             Ok(XmlEvent::End(e)) if e.name().into_inner().starts_with(&tag.include) => {
@@ -139,10 +142,26 @@ where
                 }
                 if e.name() == QName(&tag.attempt) {
                     *current_arm = Some(TryTagArms::Attempt);
-                    do_parse(reader, callback, attempt_events, depth, current_arm, tag)?;
+                    do_parse(
+                        req,
+                        reader,
+                        callback,
+                        attempt_events,
+                        depth,
+                        current_arm,
+                        tag,
+                    )?;
                 } else if e.name() == QName(&tag.except) {
                     *current_arm = Some(TryTagArms::Except);
-                    do_parse(reader, callback, except_events, depth, current_arm, tag)?;
+                    do_parse(
+                        req,
+                        reader,
+                        callback,
+                        except_events,
+                        depth,
+                        current_arm,
+                        tag,
+                    )?;
                 }
             }
 
@@ -186,6 +205,7 @@ where
 /// Parses the ESI document from the given `reader` and calls the `callback` closure upon each successfully parsed ESI tag.
 pub fn parse_tags<'a, R>(
     namespace: &str,
+    req: &Request,
     reader: &mut Reader<R>,
     callback: &mut dyn FnMut(Event<'a>) -> Result<()>,
 ) -> Result<()>
@@ -203,6 +223,7 @@ where
     let mut current_arm: Option<TryTagArms> = None;
 
     do_parse(
+        req,
         reader,
         callback,
         &mut root,
@@ -215,7 +236,7 @@ where
     Ok(())
 }
 
-fn parse_include<'a>(elem: &BytesStart) -> Result<Tag<'a>> {
+fn parse_include<'a>(req: &Request, elem: &BytesStart) -> Result<Tag<'a>> {
     let src = match elem
         .attributes()
         .flatten()
@@ -241,6 +262,9 @@ fn parse_include<'a>(elem: &BytesStart) -> Result<Tag<'a>> {
         .flatten()
         .find(|attr| attr.key.into_inner() == b"onerror")
         .is_some_and(|attr| &attr.value.to_vec() == b"continue");
+
+    let src = process_symbols(req, &src);
+    let alt = alt.map(|a| process_symbols(req, &a));
 
     Ok(Tag::Include {
         src,
@@ -278,15 +302,16 @@ fn try_end_handler<'a>(
 // If the depth is 0, the `callback` closure is called with the `Tag::Include` event
 // Otherwise, a new `Tag::Include` event is pushed to the `task` vector
 fn include_tag_handler<'e>(
+    req: &Request,
     elem: &BytesStart,
     callback: &mut dyn FnMut(Event<'e>) -> Result<()>,
     task: &mut Vec<Event<'e>>,
     depth: usize,
 ) -> Result<()> {
     if depth == 0 {
-        callback(Event::ESI(parse_include(elem)?))?;
+        callback(Event::ESI(parse_include(req, elem)?))?;
     } else {
-        task.push(Event::ESI(parse_include(elem)?));
+        task.push(Event::ESI(parse_include(req, elem)?));
     }
 
     Ok(())
