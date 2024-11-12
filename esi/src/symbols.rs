@@ -1,7 +1,9 @@
 use std::borrow::Cow;
+use std::default;
 
 use fastly::device_detection;
-use fastly::http::header::COOKIE;
+use fastly::http::header::{ACCEPT_LANGUAGE, COOKIE, HOST, REFERER};
+use fastly::http::HeaderName;
 use fastly::{handle::client_ip_addr, http::header::USER_AGENT, Request};
 use nom::{
     branch::alt,
@@ -55,7 +57,7 @@ pub enum Symbol<'e> {
     Variable {
         name: &'e str,
         key: Option<&'e str>,
-        // default: Option<Box<Symbol<'e>>>,
+        default: Option<Box<Symbol<'e>>>,
     },
     Text(Option<&'e str>),
 }
@@ -76,10 +78,11 @@ fn parse_fn_name(input: &str) -> IResult<&str, &str> {
     preceded(char('$'), take_while1(is_lower_alphanumeric_or_underscore))(input)
 }
 
-fn parse_var_name(input: &str) -> IResult<&str, (&str, Option<&str>)> {
+fn parse_var_name(input: &str) -> IResult<&str, (&str, Option<&str>, Option<Symbol>)> {
     tuple((
         take_while1(is_upper_alphanumeric_or_underscore),
         opt(delimited(char('{'), parse_var_key, char('}'))),
+        opt(preceded(char('|'), parse_fn_nested_argument)),
     ))(input)
 }
 
@@ -176,9 +179,10 @@ fn parse_function(input: &str) -> IResult<&str, Symbol> {
 fn parse_variable(input: &str) -> IResult<&str, Symbol> {
     let (input, parsed) = delimited(tag("$("), parse_var_name, char(')'))(input)?;
 
-    let (name, key) = parsed;
+    let (name, key, default) = parsed;
+    let default = default.map(|s| Box::new(s));
 
-    Ok((input, Symbol::Variable { name, key }))
+    Ok((input, Symbol::Variable { name, key, default }))
 }
 
 fn parse_symbol(input: &str) -> IResult<&str, Symbol> {
@@ -215,7 +219,7 @@ pub fn tokenize_symbols(input: &str) -> IResult<&str, Vec<Symbol>> {
     Ok((remaining_input, tokens))
 }
 
-pub fn handle_symbol(req: &Request, symbol: Symbol) -> String {
+pub fn handle_symbol(req: &Request, symbol: &Symbol) -> String {
     let mut output = String::new();
     match symbol {
         Symbol::Text(Some(text)) => output.push_str(text),
@@ -229,8 +233,8 @@ pub fn handle_symbol(req: &Request, symbol: Symbol) -> String {
             let result = resolve_fn(name, processed_args);
             output.push_str(&result);
         }
-        Symbol::Variable { name, key } => {
-            let result = resolve_var(req, name, key);
+        Symbol::Variable { name, key, default } => {
+            let result = resolve_var(req, name, *key, default);
             output.push_str(&result.as_str());
         }
     }
@@ -243,7 +247,7 @@ pub fn process_symbols(req: &Request, input: &str) -> String {
     let mut output = String::new();
 
     for symbol in input {
-        output.push_str(&handle_symbol(req, symbol));
+        output.push_str(&handle_symbol(req, &symbol));
     }
 
     output
@@ -267,15 +271,18 @@ fn resolve_fn(name: &str, args: Vec<String>) -> String {
     result
 }
 
-fn resolve_var<'v>(req: &'v Request, name: &str, key: Option<&str>) -> EValue<'v> {
+fn resolve_var<'v>(
+    req: &'v Request,
+    name: &str,
+    key: Option<&str>,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
     match name {
         // ESI w3.org 1.0 spec variables
-        "HTTP_ACCEPT_LANGUAGE" => {
-            EValue::Str(req.get_header_str("Accept-Language").unwrap_or_default())
-        }
+        "HTTP_ACCEPT_LANGUAGE" => get_header_value(req, ACCEPT_LANGUAGE, default),
         "HTTP_COOKIE" => var_http_cookie(req, key),
-        "HTTP_HOST" => EValue::Str(req.get_header_str("Host").unwrap_or_default()),
-        "HTTP_REFERER" => EValue::Str(req.get_header_str("Referer").unwrap_or_default()),
+        "HTTP_HOST" => get_header_value(req, HOST, default),
+        "HTTP_REFERER" => get_header_value(req, REFERER, default),
         "HTTP_USER_AGENT" => var_http_user_agent(req, key),
         "QUERY_STRING" => key.map_or_else(
             || EValue::AmpersandSeparatedKv(req.get_query().unwrap_or_default()),
@@ -301,6 +308,21 @@ fn resolve_var<'v>(req: &'v Request, name: &str, key: Option<&str>) -> EValue<'v
             EValue::String(result)
         }
     }
+}
+
+fn get_header_value<'v>(
+    req: &'v Request,
+    header_name: HeaderName,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
+    req.get_header_str(header_name)
+        .map(EValue::Str)
+        .unwrap_or_else(|| {
+            default
+                .as_ref()
+                .map(|symbol| EValue::String(handle_symbol(req, symbol.as_ref())))
+                .unwrap_or(EValue::String(String::new()))
+        })
 }
 
 fn var_http_user_agent<'v>(req: &'v Request, key: Option<&str>) -> EValue<'v> {
@@ -443,6 +465,7 @@ mod tests {
         let expected = Symbol::Variable {
             name: "QUERY_STRING",
             key: None,
+            default: None,
         };
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
@@ -455,6 +478,7 @@ mod tests {
         let expected = Symbol::Variable {
             name: "QUERY_STRING",
             key: Some("first"),
+            default: None,
         };
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
@@ -467,6 +491,7 @@ mod tests {
         let expected = Symbol::Variable {
             name: "QUERY_STRING",
             key: Some("first"),
+            default: None,
         };
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
@@ -507,6 +532,7 @@ mod tests {
         let expected = Symbol::Variable {
             name: "QUERY_STRING_WITH_UNDERSCORE",
             key: None,
+            default: None,
         };
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
@@ -519,6 +545,7 @@ mod tests {
         let expected = Symbol::Variable {
             name: "QUERY_STRING",
             key: Some("first_name"),
+            default: None,
         };
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
@@ -538,6 +565,7 @@ mod tests {
             Symbol::Variable {
                 name: "QUERY_STRING",
                 key: Some("key"),
+                default: None,
             },
             Symbol::Text(Some(" after.")),
         ];
@@ -681,28 +709,120 @@ mod tests {
     #[test]
     fn test_resolve_var_query_string() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
-        let result = resolve_var(&req, "QUERY_STRING", None);
+        let result = resolve_var(&req, "QUERY_STRING", None, &None);
         assert_eq!(result.as_str(), "key1=value1&key2=value2");
     }
 
     #[test]
     fn test_resolve_var_query_string_with_key() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
-        let result = resolve_var(&req, "QUERY_STRING", Some("key1"));
+        let result = resolve_var(&req, "QUERY_STRING", Some("key1"), &None);
         assert_eq!(result.as_str(), "value1");
     }
 
     #[test]
     fn test_resolve_var_query_string_with_nonexistent_key() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
-        let result = resolve_var(&req, "QUERY_STRING", Some("nonexistent"));
+        let result = resolve_var(&req, "QUERY_STRING", Some("nonexistent"), &None);
         assert_eq!(result.as_str(), "");
     }
 
     #[test]
     fn test_resolve_var_remote_addr() {
         let req = Request::from_client();
-        let result = resolve_var(&req, "REMOTE_ADDR", None);
+        let result = resolve_var(&req, "REMOTE_ADDR", None, &None);
         assert_eq!(result.as_str(), client_ip_addr().unwrap().to_string());
+    }
+
+    #[test]
+    fn test_parse_variable_with_default_literal() {
+        let input = "$(QUERY_STRING|default_value)";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: None,
+            default: Some(Box::new(Symbol::Text(Some("default_value")))),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_variable_with_default_function() {
+        let input = "$(QUERY_STRING|$func1(arg1))";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: None,
+            default: Some(Box::new(Symbol::Function {
+                name: "func1",
+                args: vec![Symbol::Text(Some("arg1"))],
+            })),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_variable_with_default_variable() {
+        let input = "$(QUERY_STRING|$(OTHER_VAR))";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: None,
+            default: Some(Box::new(Symbol::Variable {
+                name: "OTHER_VAR",
+                key: None,
+                default: None,
+            })),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_variable_with_key_and_default_literal() {
+        let input = "$(QUERY_STRING{key}|default_value)";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: Some("key"),
+            default: Some(Box::new(Symbol::Text(Some("default_value")))),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_variable_with_key_and_default_function() {
+        let input = "$(QUERY_STRING{key}|$func1(arg1))";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: Some("key"),
+            default: Some(Box::new(Symbol::Function {
+                name: "func1",
+                args: vec![Symbol::Text(Some("arg1"))],
+            })),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_variable_with_key_and_default_variable() {
+        let input = "$(QUERY_STRING{key}|$(OTHER_VAR))";
+        let expected = Symbol::Variable {
+            name: "QUERY_STRING",
+            key: Some("key"),
+            default: Some(Box::new(Symbol::Variable {
+                name: "OTHER_VAR",
+                key: None,
+                default: None,
+            })),
+        };
+        let (remaining, parsed) = parse_variable(input).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(remaining, "");
     }
 }
