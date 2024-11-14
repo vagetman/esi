@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::default;
 
 use fastly::device_detection;
 use fastly::http::header::{ACCEPT_LANGUAGE, COOKIE, HOST, REFERER};
@@ -16,10 +15,11 @@ use nom::{
 };
 use rand::Rng;
 
+#[derive(Debug)]
 pub(crate) enum EValue<'v> {
     AmpersandSeparatedKv(Vec<(String, String)>),
     CommaSeparatedKv(Vec<(String, String)>),
-    CommaSeparatedValues(Vec<String>),
+    CommaSeparatedList(Vec<String>),
     Str(&'v str),
     String(String),
     CookieList(Vec<(&'v str, &'v str)>),
@@ -43,7 +43,25 @@ impl<'v> EValue<'v> {
                 let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
                 kv_strings.collect::<Vec<String>>().join("; ").into()
             }
-            _ => Cow::Borrowed(""),
+            EValue::CommaSeparatedList(vec) => {
+                let list = vec
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Cow::Owned(list)
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            EValue::Str(s) => s.is_empty(),
+            EValue::String(s) => s.is_empty(),
+            EValue::AmpersandSeparatedKv(vec) => vec.is_empty(),
+            EValue::CommaSeparatedKv(vec) => vec.is_empty(),
+            EValue::CookieList(vec) => vec.is_empty(),
+            EValue::CommaSeparatedList(vec) => vec.is_empty(),
         }
     }
 }
@@ -180,7 +198,7 @@ fn parse_variable(input: &str) -> IResult<&str, Symbol> {
     let (input, parsed) = delimited(tag("$("), parse_var_name, char(')'))(input)?;
 
     let (name, key, default) = parsed;
-    let default = default.map(|s| Box::new(s));
+    let default = default.map(Box::new);
 
     Ok((input, Symbol::Variable { name, key, default }))
 }
@@ -206,7 +224,6 @@ pub fn tokenize_symbols(input: &str) -> IResult<&str, Vec<Symbol>> {
     while !remaining_input.is_empty() {
         let (input, element) = parse_symbol(remaining_input)?;
 
-        println!("Parsed element: {:?}", element);
         tokens.push(element);
 
         // This check prevents the parser from looping infinitely
@@ -258,7 +275,7 @@ fn resolve_fn(name: &str, args: Vec<String>) -> String {
 
     match name {
         "rand" => {
-            let n = args[0].parse::<u32>().unwrap_or(99999999);
+            let n = args[0].parse::<u32>().unwrap_or(99_999_999);
             result.push_str(&rand::thread_rng().gen_range(0..n).to_string());
         }
         "func2" => {
@@ -279,15 +296,13 @@ fn resolve_var<'v>(
 ) -> EValue<'v> {
     match name {
         // ESI w3.org 1.0 spec variables
-        "HTTP_ACCEPT_LANGUAGE" => get_header_value(req, ACCEPT_LANGUAGE, default),
-        "HTTP_COOKIE" => var_http_cookie(req, key),
-        "HTTP_HOST" => get_header_value(req, HOST, default),
-        "HTTP_REFERER" => get_header_value(req, REFERER, default),
-        "HTTP_USER_AGENT" => var_http_user_agent(req, key),
-        "QUERY_STRING" => key.map_or_else(
-            || EValue::AmpersandSeparatedKv(req.get_query().unwrap_or_default()),
-            |key| EValue::Str(req.get_query_parameter(key).unwrap_or_default()),
-        ),
+        "HTTP_ACCEPT_LANGUAGE" => header_value(req, ACCEPT_LANGUAGE, default),
+        "HTTP_COOKIE" => var_http_cookie(req, key, default),
+        "HTTP_HOST" => header_value(req, HOST, default),
+        "HTTP_REFERER" => header_value(req, REFERER, default),
+        "HTTP_USER_AGENT" => var_http_user_agent(req, key, default),
+        "QUERY_STRING" => var_query_string(req, key, default),
+
         // Akamai 5.0 ESI variables
         "REMOTE_ADDR" => EValue::String(client_ip_addr().unwrap().to_string()),
         "REQUEST_METHOD" => EValue::Str(req.get_method_str()),
@@ -310,41 +325,96 @@ fn resolve_var<'v>(
     }
 }
 
-fn get_header_value<'v>(
+// Resolve the value of the QUERY_STRING variable
+fn var_query_string<'v>(
+    req: &'v Request,
+    key: Option<&str>,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
+    let qs = key
+        .map_or_else(
+            // If no key is provided, return the entire query string as a vector of key-value pairs
+            || req.get_query().map(EValue::AmpersandSeparatedKv).ok(),
+            // If a key is provided, return the value associated with that key in the query string
+            |key| req.get_query_parameter(key).map(EValue::Str),
+        )
+        // Turn empty query strings / params to None
+        .and_then(|v| if v.is_empty() { None } else { Some(v) });
+    // If None return the provided `default` value
+    value_or_default(qs, req, default)
+}
+
+fn value_or_default<'v>(
+    value: Option<EValue<'v>>,
+    req: &'v Request,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
+    value.unwrap_or_else(|| {
+        default.as_ref().map_or_else(
+            || EValue::String(String::new()),
+            |symbol| EValue::String(handle_symbol(req, symbol.as_ref())),
+        )
+    })
+}
+
+// Resolve the value of the HTTP_USER_AGENT variable
+// The key parameter is used to extract specific information from the user agent string
+// The default parameter is used to provide a default value if the user agent string is empty
+fn header_value<'v>(
     req: &'v Request,
     header_name: HeaderName,
     default: &Option<Box<Symbol>>,
 ) -> EValue<'v> {
-    req.get_header_str(header_name)
-        .map(EValue::Str)
-        .unwrap_or_else(|| {
+    req.get_header_str(header_name).map_or_else(
+        || {
             default
                 .as_ref()
-                .map(|symbol| EValue::String(handle_symbol(req, symbol.as_ref())))
-                .unwrap_or(EValue::String(String::new()))
-        })
+                .map_or(EValue::String(String::new()), |symbol| {
+                    EValue::String(handle_symbol(req, symbol.as_ref()))
+                })
+        },
+        EValue::Str,
+    )
 }
 
-fn var_http_user_agent<'v>(req: &'v Request, key: Option<&str>) -> EValue<'v> {
-    let user_agent = req.get_header_str(USER_AGENT).unwrap_or_default();
-    key.map_or(EValue::Str(user_agent), |key| match key {
-        "browser" => {
-            let device = device_detection::lookup(user_agent);
-            let browser = device
-                .map(|d| d.device_name().map(|browser| browser.to_string()))
-                .unwrap_or_default();
-            EValue::String(browser.unwrap_or("OTHER".to_string()))
-        }
+// Resolve the value of the HTTP_USER_AGENT variable
+// The key parameter can be one of the following:
+// - browser: returns the browser name
+// - os: returns the operating system name
+// - version: returns the browser version
+// If the key parameter is not provided, the entire user agent string is returned
+fn var_http_user_agent<'v>(
+    req: &'v Request,
+    key: Option<&str>,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
+    let user_agent = header_value(req, USER_AGENT, default);
 
+    let Some(key) = key else {
+        return user_agent;
+    };
+
+    match key {
+        "browser" => {
+            let device = device_detection::lookup(&user_agent.as_str());
+            let browser = device
+                .map(|d| d.device_name().map(ToString::to_string))
+                .unwrap_or_default();
+            EValue::String(browser.unwrap_or_else(|| "OTHER".to_string()))
+        }
         // TODO: waiting for device_detection to buble this up
 
         // "os" => {}
         // "version" => {}
-        _ => EValue::Str(user_agent),
-    })
+        _ => user_agent,
+    }
 }
 
-fn var_http_cookie<'v>(req: &'v Request, key: Option<&str>) -> EValue<'v> {
+fn var_http_cookie<'v>(
+    req: &'v Request,
+    key: Option<&str>,
+    default: &Option<Box<Symbol>>,
+) -> EValue<'v> {
     let cookies = req.get_header_str(COOKIE).unwrap_or_default();
     let cookies = cookies
         .split(';')
@@ -356,16 +426,17 @@ fn var_http_cookie<'v>(req: &'v Request, key: Option<&str>) -> EValue<'v> {
         })
         .collect::<Vec<(&str, &str)>>();
 
-    if let Some(key) = key {
-        let value = cookies
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| *v)
-            .unwrap_or_default();
-        EValue::Str(value)
-    } else {
-        EValue::CookieList(cookies)
-    }
+    key.map_or_else(
+        || value_or_default(None, req, default),
+        |key| {
+            let value = cookies
+                .iter()
+                .find(|(k, _)| **k == *key)
+                .map(|(_, v)| *v)
+                .unwrap_or_default();
+            EValue::Str(value)
+        },
+    )
 }
 
 #[cfg(test)]
