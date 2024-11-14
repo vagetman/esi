@@ -105,26 +105,15 @@ fn parse_var_name(input: &str) -> IResult<&str, (&str, Option<&str>, Option<Symb
 }
 
 fn parse_not_quoted_dollar_or_brackets(input: &str) -> IResult<&str, &str> {
-    take_till(|c: char| {
-        c == '$' || c == '\'' || c == '(' || c == ')' || c == '{' || c == '}' || c == ','
-    })(input)
+    take_till(|c: char| "$'(){},".contains(c))(input)
 }
 
 fn parse_not_space_quoted_dollar_or_brackets(input: &str) -> IResult<&str, &str> {
-    take_till(|c: char| {
-        c.is_whitespace()
-            || c == '$'
-            || c == '\''
-            || c == '('
-            || c == ')'
-            || c == '{'
-            || c == '}'
-            || c == ','
-    })(input)
+    take_till(|c: char| c.is_whitespace() || "$'(){},".contains(c))(input)
 }
 
 fn parse_not_dollar_or_curlies(input: &str) -> IResult<&str, &str> {
-    take_till(|c: char| c == '$' || c == '{' || c == '}' || c == ',' || c == '"')(input)
+    take_till(|c: char| "${},\"".contains(c))(input)
 }
 
 fn parse_single_quoted_ascii(input: &str) -> IResult<&str, &str> {
