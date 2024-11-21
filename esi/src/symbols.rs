@@ -16,7 +16,8 @@ use nom::{
 use rand::Rng;
 
 #[derive(Debug)]
-pub(crate) enum EValue<'v> {
+#[allow(dead_code)]
+pub enum EValue<'v> {
     AmpersandSeparatedKv(Vec<(String, String)>),
     CommaSeparatedKv(Vec<(String, String)>),
     CommaSeparatedList(Vec<String>),
@@ -79,10 +80,6 @@ pub enum Symbol<'e> {
     },
     Text(Option<&'e str>),
 }
-
-// fn is_alphanumeric_or_underscore(c: char) -> bool {
-//     c.is_alphanumeric() || c.is_numeric() || c == '_'
-// }
 
 fn is_upper_alphanumeric_or_underscore(c: char) -> bool {
     c.is_ascii_uppercase() || c.is_numeric() || c == '_'
@@ -206,6 +203,10 @@ fn parse_symbol(input: &str) -> IResult<&str, Symbol> {
     ))(input)
 }
 
+// Tokenizes the input string into a vector of symbols.
+//
+// This function takes an input string and tokenizes it into a vector of `Symbol` objects.
+// It repeatedly parses symbols from the input string until the entire string is processed or an error occurs.
 pub fn tokenize_symbols(input: &str) -> IResult<&str, Vec<Symbol>> {
     let mut tokens = Vec::new();
     let mut remaining_input = input;
@@ -225,10 +226,16 @@ pub fn tokenize_symbols(input: &str) -> IResult<&str, Vec<Symbol>> {
     Ok((remaining_input, tokens))
 }
 
+// Handles a symbol and returns the resulting string.
+//
+// This function processes a given symbol based on its type and returns the corresponding string result.
+// It supports processing text, functions, and variables.
+// For functions, it recursively processes the arguments and resolves the function name.
+// For variables, it resolves the variable name and key.
 pub fn handle_symbol(req: &Request, symbol: &Symbol) -> String {
-    let mut output = String::new();
+    let mut result = String::new();
     match symbol {
-        Symbol::Text(Some(text)) => output.push_str(text),
+        Symbol::Text(Some(text)) => result.push_str(text),
         Symbol::Text(None) => {}
         Symbol::Function { name, args } => {
             let mut processed_args = Vec::new();
@@ -236,29 +243,36 @@ pub fn handle_symbol(req: &Request, symbol: &Symbol) -> String {
             for arg in args {
                 processed_args.push(handle_symbol(req, arg));
             }
-            let result = resolve_fn(name, processed_args);
-            output.push_str(&result);
+            let resolved = resolve_fn(name, processed_args);
+            result.push_str(&resolved);
         }
         Symbol::Variable { name, key, default } => {
-            let result = resolve_var(req, name, *key, default);
-            output.push_str(&result.as_str());
+            let resolved = resolve_var(req, name, *key, default);
+            result.push_str(&resolved.as_str());
         }
     }
-    output
+    result
 }
 
+// Processes symbols in the input string and returns the resulting string.
+//
+// This function tokenizes the input string into symbols, processes each symbol using the `handle_symbol` function,
+// and concatenates the results into a single result string.
 pub fn process_symbols(req: &Request, input: &str) -> String {
     let input = tokenize_symbols(input).unwrap().1;
 
-    let mut output = String::new();
+    let mut result = String::new();
 
     for symbol in input {
-        output.push_str(&handle_symbol(req, &symbol));
+        result.push_str(&handle_symbol(req, &symbol));
     }
 
-    output
+    result
 }
 
+// Resolves a function name and its arguments to a resulting string.
+//
+// This function takes a function name and a list of arguments, and processes the function based on its name.
 fn resolve_fn(name: &str, args: Vec<String>) -> String {
     let mut result = String::new();
 
@@ -277,6 +291,7 @@ fn resolve_fn(name: &str, args: Vec<String>) -> String {
     result
 }
 
+// Resolves a variable to its value.
 fn resolve_var<'v>(
     req: &'v Request,
     name: &str,
@@ -333,6 +348,7 @@ fn var_query_string<'v>(
     value_or_default(qs, req, default)
 }
 
+// Returns the provided value or a default value if the provided value is `None`.
 fn value_or_default<'v>(
     value: Option<EValue<'v>>,
     req: &'v Request,
