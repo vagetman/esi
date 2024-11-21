@@ -407,25 +407,18 @@ fn var_http_cookie<'v>(
     let cookies = req.get_header_str(COOKIE).unwrap_or_default();
     let cookies = cookies
         .split(';')
-        .map(|cookie| {
-            let mut parts = cookie.split('=');
-            let key = parts.next().unwrap_or_default().trim();
-            let value = parts.next().unwrap_or_default().trim();
-            (key, value)
-        })
+        .flat_map(|cookie| cookie.split_once('='))
         .collect::<Vec<(&str, &str)>>();
 
-    key.map_or_else(
-        || value_or_default(None, req, default),
-        |key| {
-            let value = cookies
-                .iter()
-                .find(|(k, _)| **k == *key)
-                .map(|(_, v)| *v)
-                .unwrap_or_default();
-            EValue::Str(value)
-        },
-    )
+    let found = key
+        .and_then(|key| cookies.iter().find(|(k, _)| **k == *key).map(|(_, v)| *v))
+        .map(EValue::Str);
+
+    if key.is_none() || found.is_none() {
+        value_or_default(Some(EValue::CookieList(cookies)), req, default)
+    } else {
+        value_or_default(found, req, default)
+    }
 }
 
 #[cfg(test)]
