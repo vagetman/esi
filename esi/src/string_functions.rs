@@ -13,6 +13,25 @@ pub fn string_split<'a>(args: &[EValue]) -> EValue<'a> {
     let val = string.splitn(max_sep, &*sep).map(String::from).collect();
     EValue::ListString(val)
 }
+
+pub fn join<'a>(args: &[EValue]) -> EValue<'a> {
+    // $join(list [,sep])
+    if args.is_empty() {
+        return EValue::Str("");
+    }
+    let Some(arg0) = args.first() else {
+        return EValue::Str("");
+    };
+
+    let EValue::ListString(list) = arg0 else {
+        return EValue::String(arg0.as_str().to_string());
+    };
+    let sep = args.get(1).map_or(Cow::Borrowed(" "), |s| s.as_str());
+
+    let val = list.join(&*sep);
+    EValue::String(val)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +94,38 @@ mod tests {
         } else {
             panic!("Expected ListString variant");
         }
+    }
+    #[test]
+    fn test_join_empty_list() {
+        let args = vec![];
+        let result = join(&args);
+        assert_eq!(result.as_str(), "");
+    }
+
+    #[test]
+    fn test_join_single_element() {
+        let args = vec![EValue::String("hello".to_string())];
+        let result = join(&args);
+        assert_eq!(result.as_str(), "hello");
+    }
+
+    #[test]
+    fn test_join_with_custom_separator() {
+        let args = vec![
+            EValue::ListString(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+            EValue::String("|".to_string()),
+        ];
+        let result = join(&args);
+        assert_eq!(result.as_str(), "a|b|c");
+    }
+
+    #[test]
+    fn test_join_with_empty_separator() {
+        let args = vec![
+            EValue::ListString(vec!["hello".to_string(), "world".to_string()]),
+            EValue::String("".to_string()),
+        ];
+        let result = join(&args);
+        assert_eq!(result.as_str(), "helloworld");
     }
 }

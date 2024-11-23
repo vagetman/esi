@@ -15,14 +15,13 @@ use nom::{
 };
 use rand::Rng;
 
-use crate::string_functions::string_split;
+use crate::string_functions::{join, string_split};
 
-#[derive(Debug)]
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
+// #[allow(dead_code)]
 pub enum EValue<'v> {
-    AmpersandSeparatedKv(Vec<(String, String)>),
-    CommaSeparatedKv(Vec<(String, String)>),
-    CookieList(Vec<(&'v str, &'v str)>),
+    DictString(Vec<(String, String)>),
+    DictStr(Vec<(&'v str, &'v str)>),
     ListString(Vec<String>),
     Str(&'v str),
     String(String),
@@ -38,19 +37,21 @@ impl<'v> From<&'v str> for EValue<'v> {
         EValue::Str(s)
     }
 }
+impl std::fmt::Display for EValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 impl<'v> EValue<'v> {
     // this will avoid the need to clone the string
     pub fn as_str(&self) -> Cow<str> {
         match self {
-            EValue::AmpersandSeparatedKv(vec) => {
+            EValue::DictString(vec) => {
                 let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
                 kv_strings.collect::<Vec<String>>().join("&").into()
             }
-            EValue::CommaSeparatedKv(vec) => {
-                let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
-                kv_strings.collect::<Vec<String>>().join(", ").into()
-            }
-            EValue::CookieList(vec) => {
+            EValue::DictStr(vec) => {
                 let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
                 kv_strings.collect::<Vec<String>>().join("; ").into()
             }
@@ -69,9 +70,8 @@ impl<'v> EValue<'v> {
 
     fn is_empty(&self) -> bool {
         match self {
-            EValue::AmpersandSeparatedKv(vec) => vec.is_empty(),
-            EValue::CommaSeparatedKv(vec) => vec.is_empty(),
-            EValue::CookieList(vec) => vec.is_empty(),
+            EValue::DictString(vec) => vec.is_empty(),
+            EValue::DictStr(vec) => vec.is_empty(),
             EValue::ListString(vec) => vec.is_empty(),
             EValue::Str(s) => s.is_empty(),
             EValue::String(s) => s.is_empty(),
@@ -290,6 +290,7 @@ fn resolve_fn<'a>(req: &'a Request, name: &'a str, args: &'a [Symbol<'a>]) -> EV
         "squote" => result.push('\''),
         // string functions
         "string_split" => return string_split(&processed_args),
+        "join" => return join(&processed_args),
         "rand" => {
             let n = processed_args[0]
                 .as_str()
@@ -315,7 +316,7 @@ fn resolve_var<'v>(
     req: &'v Request,
     name: &str,
     key: Option<&str>,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
     match name {
         // ESI w3.org 1.0 spec variables
@@ -326,8 +327,10 @@ fn resolve_var<'v>(
         "HTTP_USER_AGENT" => var_http_user_agent(req, key, default),
         "QUERY_STRING" => var_query_string(req, key, default),
 
-        // Akamai 5.0 ESI variables
-        "REMOTE_ADDR" => EValue::String(client_ip_addr().unwrap().to_string()),
+        // Akamai EdgeSuite 5.0 ESI variables
+        "REMOTE_ADDR" => {
+            EValue::String(client_ip_addr().map(|a| a.to_string()).unwrap_or_default())
+        }
         "REQUEST_METHOD" => EValue::Str(req.get_method_str()),
         "REQUEST_PATH" => EValue::Str(req.get_path()),
 
@@ -352,12 +355,12 @@ fn resolve_var<'v>(
 fn var_query_string<'v>(
     req: &'v Request,
     key: Option<&str>,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
     let qs = key
         .map_or_else(
             // If no key is provided, return the entire query string as a vector of key-value pairs
-            || req.get_query().map(EValue::AmpersandSeparatedKv).ok(),
+            || req.get_query().map(EValue::DictString).ok(),
             // If a key is provided, return the value associated with that key in the query string
             |key| req.get_query_parameter(key).map(EValue::Str),
         )
@@ -371,34 +374,26 @@ fn var_query_string<'v>(
 fn value_or_default<'v>(
     value: Option<EValue<'v>>,
     req: &'v Request,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
     value.unwrap_or_else(|| {
         default.as_ref().map_or_else(
             || EValue::String(String::new()),
-            |symbol| EValue::String(handle_symbol(req, symbol.as_ref()).as_str().to_string()),
+            |symbol| handle_symbol(req, symbol.as_ref()),
         )
     })
 }
 
-// Resolve the value of the HTTP_USER_AGENT variable
+// Resolve the value of a header
 // The key parameter is used to extract specific information from the user agent string
 // The default parameter is used to provide a default value if the user agent string is empty
 fn header_value<'v>(
     req: &'v Request,
     header_name: HeaderName,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
-    req.get_header_str(header_name).map_or_else(
-        || {
-            default
-                .as_ref()
-                .map_or(EValue::String(String::new()), |symbol| {
-                    EValue::String(handle_symbol(req, symbol.as_ref()).as_str().to_string())
-                })
-        },
-        EValue::Str,
-    )
+    let value = req.get_header_str(header_name).map(EValue::Str);
+    value_or_default(value, req, default)
 }
 
 // Resolve the value of the HTTP_USER_AGENT variable
@@ -410,7 +405,7 @@ fn header_value<'v>(
 fn var_http_user_agent<'v>(
     req: &'v Request,
     key: Option<&str>,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
     let user_agent = header_value(req, USER_AGENT, default);
 
@@ -437,16 +432,16 @@ fn var_http_user_agent<'v>(
 fn var_http_cookie<'v>(
     req: &'v Request,
     key: Option<&str>,
-    default: &Option<Box<Symbol>>,
+    default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
     let cookies = req.get_header_str(COOKIE).unwrap_or_default();
     let cookies = cookies
         .split(';')
-        .flat_map(|cookie| cookie.trim().split_once('='))
+        .filter_map(|cookie| cookie.trim().split_once('='))
         .collect::<Vec<(&str, &str)>>();
 
     if key.is_none() {
-        return value_or_default(Some(EValue::CookieList(cookies)), req, default);
+        return value_or_default(Some(EValue::DictStr(cookies)), req, default);
     }
     let found = key
         .and_then(|key| cookies.iter().find(|(k, _)| **k == *key).map(|(_, v)| *v))
