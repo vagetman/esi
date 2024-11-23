@@ -4,6 +4,7 @@ mod config;
 mod document;
 mod error;
 mod parse;
+mod string_functions;
 mod symbols;
 
 use document::{FetchState, Task};

@@ -15,23 +15,33 @@ use nom::{
 };
 use rand::Rng;
 
+use crate::string_functions::string_split;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum EValue<'v> {
     AmpersandSeparatedKv(Vec<(String, String)>),
     CommaSeparatedKv(Vec<(String, String)>),
-    CommaSeparatedList(Vec<String>),
+    CookieList(Vec<(&'v str, &'v str)>),
+    ListString(Vec<String>),
     Str(&'v str),
     String(String),
-    CookieList(Vec<(&'v str, &'v str)>),
 }
 
+impl From<String> for EValue<'_> {
+    fn from(s: String) -> Self {
+        EValue::String(s)
+    }
+}
+impl<'v> From<&'v str> for EValue<'v> {
+    fn from(s: &'v str) -> Self {
+        EValue::Str(s)
+    }
+}
 impl<'v> EValue<'v> {
     // this will avoid the need to clone the string
-    fn as_str(&self) -> Cow<str> {
+    pub fn as_str(&self) -> Cow<str> {
         match self {
-            EValue::Str(s) => Cow::Borrowed(s),
-            EValue::String(s) => Cow::Borrowed(s.as_str()),
             EValue::AmpersandSeparatedKv(vec) => {
                 let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
                 kv_strings.collect::<Vec<String>>().join("&").into()
@@ -44,7 +54,7 @@ impl<'v> EValue<'v> {
                 let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
                 kv_strings.collect::<Vec<String>>().join("; ").into()
             }
-            EValue::CommaSeparatedList(vec) => {
+            EValue::ListString(vec) => {
                 let list = vec
                     .iter()
                     .map(ToString::to_string)
@@ -52,17 +62,19 @@ impl<'v> EValue<'v> {
                     .join(", ");
                 Cow::Owned(list)
             }
+            EValue::Str(s) => Cow::Borrowed(s),
+            EValue::String(s) => Cow::Borrowed(s.as_str()),
         }
     }
 
     fn is_empty(&self) -> bool {
         match self {
-            EValue::Str(s) => s.is_empty(),
-            EValue::String(s) => s.is_empty(),
             EValue::AmpersandSeparatedKv(vec) => vec.is_empty(),
             EValue::CommaSeparatedKv(vec) => vec.is_empty(),
             EValue::CookieList(vec) => vec.is_empty(),
-            EValue::CommaSeparatedList(vec) => vec.is_empty(),
+            EValue::ListString(vec) => vec.is_empty(),
+            EValue::Str(s) => s.is_empty(),
+            EValue::String(s) => s.is_empty(),
         }
     }
 }
@@ -232,31 +244,18 @@ pub fn tokenize_symbols(input: &str) -> IResult<&str, Vec<Symbol>> {
 // It supports processing text, functions, and variables.
 // For functions, it recursively processes the arguments and resolves the function name.
 // For variables, it resolves the variable name and key.
-pub fn handle_symbol(req: &Request, symbol: &Symbol) -> String {
-    let mut result = String::new();
+pub fn handle_symbol<'a: 'b, 'b>(req: &'a Request, symbol: &'b Symbol<'b>) -> EValue<'b> {
     match symbol {
-        Symbol::Text(Some(text)) => result.push_str(text),
-        Symbol::Text(None) => {}
-        Symbol::Function { name, args } => {
-            let mut processed_args = Vec::new();
-            // Recursively process the arguments
-            for arg in args {
-                processed_args.push(handle_symbol(req, arg));
-            }
-            let resolved = resolve_fn(name, processed_args);
-            result.push_str(&resolved);
-        }
-        Symbol::Variable { name, key, default } => {
-            let resolved = resolve_var(req, name, *key, default);
-            result.push_str(&resolved.as_str());
-        }
+        Symbol::Function { name, args } => resolve_fn(req, name, args),
+        Symbol::Text(Some(text)) => (*text).into(),
+        Symbol::Text(None) => "".into(),
+        Symbol::Variable { name, key, default } => resolve_var(req, name, *key, default),
     }
-    result
 }
 
 // Processes symbols in the input string and returns the resulting string.
 //
-// This function tokenizes the input string into symbols, processes each symbol using the `handle_symbol` function,
+// This function tokenizes the input string into symbols, processes each symbol,
 // and concatenates the results into a single result string.
 pub fn process_symbols(req: &Request, input: &str) -> String {
     let input = tokenize_symbols(input).unwrap().1;
@@ -264,7 +263,8 @@ pub fn process_symbols(req: &Request, input: &str) -> String {
     let mut result = String::new();
 
     for symbol in input {
-        result.push_str(&handle_symbol(req, &symbol));
+        let evalue = handle_symbol(req, &symbol);
+        result.push_str(&evalue.as_str());
     }
 
     result
@@ -273,25 +273,44 @@ pub fn process_symbols(req: &Request, input: &str) -> String {
 // Resolves a function name and its arguments to a resulting string.
 //
 // This function takes a function name and a list of arguments, and processes the function based on its name.
-fn resolve_fn(name: &str, args: Vec<String>) -> String {
+fn resolve_fn<'a>(req: &'a Request, name: &'a str, args: &'a [Symbol<'a>]) -> EValue<'a> {
+    let mut processed_args: Vec<EValue> = Vec::new();
+    // Recursively resolve the arguments
+    for arg in args {
+        let evalue = handle_symbol(req, arg);
+        processed_args.push(evalue);
+    }
+
     let mut result = String::new();
 
     match name {
+        // literals
+        "dollar" => result.push('$'),
+        "dquote" => result.push('"'),
+        "squote" => result.push('\''),
+        // string functions
+        "string_split" => return string_split(&processed_args),
         "rand" => {
-            let n = args[0].parse::<u32>().unwrap_or(99_999_999);
+            let n = processed_args[0]
+                .as_str()
+                .parse::<u32>()
+                .unwrap_or(99_999_999);
             result.push_str(&rand::thread_rng().gen_range(0..n).to_string());
         }
-        "func2" => {
-            for arg in args {
-                result.push_str(&arg);
-            }
-        }
+        // "func2" => {
+        //     for arg in processed_args {
+        //         result.push_str(&processed_args[0].as_str());
+        //     }
+        // }
         _ => result.push_str("unknown_function"),
     }
-    result
+    EValue::String(result)
 }
 
 // Resolves a variable to its value.
+//
+// This function takes a variable name, an optional key, and an optional default value,
+// and resolves the variable to its value based on the provided request.
 fn resolve_var<'v>(
     req: &'v Request,
     name: &str,
@@ -357,7 +376,7 @@ fn value_or_default<'v>(
     value.unwrap_or_else(|| {
         default.as_ref().map_or_else(
             || EValue::String(String::new()),
-            |symbol| EValue::String(handle_symbol(req, symbol.as_ref())),
+            |symbol| EValue::String(handle_symbol(req, symbol.as_ref()).as_str().to_string()),
         )
     })
 }
@@ -375,7 +394,7 @@ fn header_value<'v>(
             default
                 .as_ref()
                 .map_or(EValue::String(String::new()), |symbol| {
-                    EValue::String(handle_symbol(req, symbol.as_ref()))
+                    EValue::String(handle_symbol(req, symbol.as_ref()).as_str().to_string())
                 })
         },
         EValue::Str,
@@ -423,15 +442,18 @@ fn var_http_cookie<'v>(
     let cookies = req.get_header_str(COOKIE).unwrap_or_default();
     let cookies = cookies
         .split(';')
-        .flat_map(|cookie| cookie.split_once('='))
+        .flat_map(|cookie| cookie.trim().split_once('='))
         .collect::<Vec<(&str, &str)>>();
 
+    if key.is_none() {
+        return value_or_default(Some(EValue::CookieList(cookies)), req, default);
+    }
     let found = key
         .and_then(|key| cookies.iter().find(|(k, _)| **k == *key).map(|(_, v)| *v))
         .map(EValue::Str);
 
-    if key.is_none() || found.is_none() {
-        value_or_default(Some(EValue::CookieList(cookies)), req, default)
+    if found.is_none() {
+        value_or_default(None, req, default)
     } else {
         value_or_default(found, req, default)
     }
@@ -893,5 +915,51 @@ mod tests {
         let (remaining, parsed) = parse_variable(input).unwrap();
         assert_eq!(parsed, expected);
         assert_eq!(remaining, "");
+    }
+    #[test]
+    fn test_var_http_cookie_no_cookies() {
+        let req = Request::new(Method::GET, "http://example.com");
+        let result = var_http_cookie(&req, None, &None);
+        assert_eq!(result.as_str(), "");
+    }
+
+    #[test]
+    fn test_var_http_cookie_single_cookie() {
+        let mut req = Request::new(Method::GET, "http://example.com");
+        req.set_header(COOKIE, "session=abc123");
+        let result = var_http_cookie(&req, None, &None);
+        assert_eq!(result.as_str(), "session=abc123");
+    }
+
+    #[test]
+    fn test_var_http_cookie_multiple_cookies() {
+        let mut req = Request::new(Method::GET, "http://example.com");
+        req.set_header(COOKIE, "session=abc123; user=john; theme=dark");
+        let result = var_http_cookie(&req, None, &None);
+        assert_eq!(result.as_str(), "session=abc123; user=john; theme=dark");
+    }
+
+    #[test]
+    fn test_var_http_cookie_with_key() {
+        let mut req = Request::new(Method::GET, "http://example.com");
+        req.set_header(COOKIE, "session=abc123; user=john");
+        let result = var_http_cookie(&req, Some("user"), &None);
+        assert_eq!(result.as_str(), "john");
+    }
+
+    #[test]
+    fn test_var_http_cookie_with_nonexistent_key() {
+        let mut req = Request::new(Method::GET, "http://example.com");
+        req.set_header(COOKIE, "session=abc123");
+        let result = var_http_cookie(&req, Some("nonexistent"), &None);
+        assert_eq!(result.as_str(), "");
+    }
+
+    #[test]
+    fn test_var_http_cookie_with_default() {
+        let req = Request::new(Method::GET, "http://example.com");
+        let default = Some(Box::new(Symbol::Text(Some("default_cookie"))));
+        let result = var_http_cookie(&req, Some("nonexistent"), &default);
+        assert_eq!(result.as_str(), "default_cookie");
     }
 }
