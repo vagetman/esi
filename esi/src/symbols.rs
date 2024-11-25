@@ -18,63 +18,120 @@ use rand::Rng;
 use crate::string_functions::{join, string_split};
 
 #[derive(Debug, Clone)]
-// #[allow(dead_code)]
 pub enum EValue<'v> {
-    DictString(Vec<(String, String)>),
-    DictStr(Vec<(&'v str, &'v str)>),
-    ListString(Vec<String>),
-    Str(&'v str),
-    String(String),
+    Dict(Vec<(Cow<'v, str>, Cow<'v, str>)>), // Dict with `Cow` for both keys and values
+    List(Vec<Cow<'v, str>>),                 // List of strings (borrowed or owned)
+    Str(Cow<'v, str>),                       // Single string (borrowed or owned)
 }
 
-impl From<String> for EValue<'_> {
+impl<'v> From<String> for EValue<'v> {
     fn from(s: String) -> Self {
-        EValue::String(s)
+        EValue::Str(Cow::Owned(s)) // Convert `String` to `Cow::Owned`
     }
 }
+
 impl<'v> From<&'v str> for EValue<'v> {
     fn from(s: &'v str) -> Self {
-        EValue::Str(s)
-    }
-}
-impl std::fmt::Display for EValue<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        EValue::Str(Cow::Borrowed(s)) // Convert `&str` to `Cow::Borrowed`
     }
 }
 
-impl<'v> EValue<'v> {
-    // this will avoid the need to clone the string
-    pub fn as_str(&self) -> Cow<str> {
+impl<'v> From<Vec<Cow<'v, str>>> for EValue<'v> {
+    fn from(v: Vec<Cow<'v, str>>) -> Self {
+        EValue::List(v)
+    }
+}
+
+impl<'v> From<Vec<&'v str>> for EValue<'v> {
+    fn from(vec: Vec<&'v str>) -> Self {
+        EValue::List(vec.into_iter().map(Cow::Borrowed).collect())
+    }
+}
+
+impl<'v> From<Vec<String>> for EValue<'v> {
+    fn from(vec: Vec<String>) -> Self {
+        EValue::List(vec.into_iter().map(Cow::Owned).collect())
+    }
+}
+
+impl<'v> From<Vec<(String, String)>> for EValue<'v> {
+    fn from(vec: Vec<(String, String)>) -> Self {
+        EValue::Dict(
+            vec.into_iter()
+                .map(|(k, v)| (Cow::Owned(k), Cow::Owned(v)))
+                .collect(),
+        )
+    }
+}
+
+impl<'v> From<Vec<(&'v str, &'v str)>> for EValue<'v> {
+    fn from(vec: Vec<(&'v str, &'v str)>) -> Self {
+        EValue::Dict(
+            vec.into_iter()
+                .map(|(k, v)| (Cow::Borrowed(k), Cow::Borrowed(v)))
+                .collect(),
+        )
+    }
+}
+
+impl std::fmt::Display for EValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EValue::DictString(vec) => {
-                let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
-                kv_strings.collect::<Vec<String>>().join("&").into()
+            EValue::Str(s) => write!(f, "{s}"),
+            EValue::List(list) => {
+                let joined = list.join(", ");
+                write!(f, "[{joined}]")
             }
-            EValue::DictStr(vec) => {
-                let kv_strings = vec.iter().map(|(k, v)| format!("{k}={v}"));
-                kv_strings.collect::<Vec<String>>().join("; ").into()
+            EValue::Dict(_) => {
+                let formatted = self.to_formatted_string(", ");
+                write!(f, "{{{formatted}}}")
             }
-            EValue::ListString(vec) => {
-                let list = vec
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl<'v> EValue<'v> {
+    fn to_formatted_string(&self, separator: &str) -> String {
+        match self {
+            EValue::Dict(vec) => {
+                let formatted = vec
                     .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Cow::Owned(list)
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(separator);
+                formatted
             }
-            EValue::Str(s) => Cow::Borrowed(s),
-            EValue::String(s) => Cow::Borrowed(s.as_str()),
+            EValue::Str(s) => s.to_string(),
+            EValue::List(_) => String::new(),
+        }
+    }
+
+    pub fn to_cookie(&self) -> String {
+        self.to_formatted_string("; ")
+    }
+
+    pub fn to_qs(&self) -> String {
+        self.to_formatted_string("&")
+    }
+
+    // this will avoid the need to clone the string
+    pub fn as_str(&self) -> &str {
+        match self {
+            EValue::Str(s) => s, // Dereference `Cow` to get `&str`
+            // _ => {
+            //     let formatted = self.to_string();
+            //     Box::leak(formatted.into_boxed_str())
+            // }
+            _ => "",
         }
     }
 
     fn is_empty(&self) -> bool {
         match self {
-            EValue::DictString(vec) => vec.is_empty(),
-            EValue::DictStr(vec) => vec.is_empty(),
-            EValue::ListString(vec) => vec.is_empty(),
+            EValue::Dict(vec) => vec.is_empty(),
+            EValue::List(vec) => vec.is_empty(),
             EValue::Str(s) => s.is_empty(),
-            EValue::String(s) => s.is_empty(),
         }
     }
 }
@@ -264,7 +321,7 @@ pub fn process_symbols(req: &Request, input: &str) -> String {
 
     for symbol in input {
         let evalue = handle_symbol(req, &symbol);
-        result.push_str(&evalue.as_str());
+        result.push_str(evalue.as_str());
     }
 
     result
@@ -305,7 +362,7 @@ fn resolve_fn<'a>(req: &'a Request, name: &'a str, args: &'a [Symbol<'a>]) -> EV
         // }
         _ => result.push_str("unknown_function"),
     }
-    EValue::String(result)
+    result.into()
 }
 
 // Resolves a variable to its value.
@@ -328,11 +385,12 @@ fn resolve_var<'v>(
         "QUERY_STRING" => var_query_string(req, key, default),
 
         // Akamai EdgeSuite 5.0 ESI variables
-        "REMOTE_ADDR" => {
-            EValue::String(client_ip_addr().map(|a| a.to_string()).unwrap_or_default())
-        }
-        "REQUEST_METHOD" => EValue::Str(req.get_method_str()),
-        "REQUEST_PATH" => EValue::Str(req.get_path()),
+        "REMOTE_ADDR" => client_ip_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default()
+            .into(),
+        "REQUEST_METHOD" => req.get_method_str().into(),
+        "REQUEST_PATH" => req.get_path().into(),
 
         // "TRAFFIC_INFO" => {}
         // "GEO" => {}
@@ -346,7 +404,7 @@ fn resolve_var<'v>(
         _ => {
             let result =
                 key.map_or_else(|| format!("$({name})"), |key| format!("$({name}{{{key}}})"));
-            EValue::String(result)
+            result.into()
         }
     }
 }
@@ -360,9 +418,9 @@ fn var_query_string<'v>(
     let qs = key
         .map_or_else(
             // If no key is provided, return the entire query string as a vector of key-value pairs
-            || req.get_query().map(EValue::DictString).ok(),
+            || req.get_query().map(EValue::Dict).ok(),
             // If a key is provided, return the value associated with that key in the query string
-            |key| req.get_query_parameter(key).map(EValue::Str),
+            |key| req.get_query_parameter(key).map(EValue::from),
         )
         // Turn empty query strings / params to None
         .and_then(|v| if v.is_empty() { None } else { Some(v) });
@@ -378,7 +436,8 @@ fn value_or_default<'v>(
 ) -> EValue<'v> {
     value.unwrap_or_else(|| {
         default.as_ref().map_or_else(
-            || EValue::String(String::new()),
+            // If no value and no default is provided, return an empty string
+            || EValue::from(""),
             |symbol| handle_symbol(req, symbol.as_ref()),
         )
     })
@@ -392,7 +451,7 @@ fn header_value<'v>(
     header_name: HeaderName,
     default: &'v Option<Box<Symbol>>,
 ) -> EValue<'v> {
-    let value = req.get_header_str(header_name).map(EValue::Str);
+    let value = req.get_header_str(header_name).map(EValue::from);
     value_or_default(value, req, default)
 }
 
@@ -415,11 +474,11 @@ fn var_http_user_agent<'v>(
 
     match key {
         "browser" => {
-            let device = device_detection::lookup(&user_agent.as_str());
+            let device = device_detection::lookup(user_agent.as_str());
             let browser = device
                 .map(|d| d.device_name().map(ToString::to_string))
                 .unwrap_or_default();
-            EValue::String(browser.unwrap_or_else(|| "OTHER".to_string()))
+            browser.unwrap_or_else(|| "OTHER".to_string()).into()
         }
         // TODO: waiting for device_detection to buble this up
 
@@ -441,11 +500,11 @@ fn var_http_cookie<'v>(
         .collect::<Vec<(&str, &str)>>();
 
     if key.is_none() {
-        return value_or_default(Some(EValue::DictStr(cookies)), req, default);
+        return value_or_default(Some(cookies.into()), req, default);
     }
     let found = key
         .and_then(|key| cookies.iter().find(|(k, _)| **k == *key).map(|(_, v)| *v))
-        .map(EValue::Str);
+        .map(EValue::from);
 
     if found.is_none() {
         value_or_default(None, req, default)
@@ -796,21 +855,21 @@ mod tests {
     fn test_resolve_var_query_string() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
         let result = resolve_var(&req, "QUERY_STRING", None, &None);
-        assert_eq!(result.as_str(), "key1=value1&key2=value2");
+        assert_eq!(result.to_qs(), "key1=value1&key2=value2");
     }
 
     #[test]
     fn test_resolve_var_query_string_with_key() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
         let result = resolve_var(&req, "QUERY_STRING", Some("key1"), &None);
-        assert_eq!(result.as_str(), "value1");
+        assert_eq!(result.to_qs(), "value1");
     }
 
     #[test]
     fn test_resolve_var_query_string_with_nonexistent_key() {
         let req = Request::new(Method::GET, "http://example.com/?key1=value1&key2=value2");
         let result = resolve_var(&req, "QUERY_STRING", Some("nonexistent"), &None);
-        assert_eq!(result.as_str(), "");
+        assert_eq!(result.to_qs(), "");
     }
 
     #[test]
@@ -915,7 +974,7 @@ mod tests {
     fn test_var_http_cookie_no_cookies() {
         let req = Request::new(Method::GET, "http://example.com");
         let result = var_http_cookie(&req, None, &None);
-        assert_eq!(result.as_str(), "");
+        assert_eq!(result.to_cookie(), "");
     }
 
     #[test]
@@ -923,7 +982,7 @@ mod tests {
         let mut req = Request::new(Method::GET, "http://example.com");
         req.set_header(COOKIE, "session=abc123");
         let result = var_http_cookie(&req, None, &None);
-        assert_eq!(result.as_str(), "session=abc123");
+        assert_eq!(result.to_cookie(), "session=abc123");
     }
 
     #[test]
@@ -931,7 +990,7 @@ mod tests {
         let mut req = Request::new(Method::GET, "http://example.com");
         req.set_header(COOKIE, "session=abc123; user=john; theme=dark");
         let result = var_http_cookie(&req, None, &None);
-        assert_eq!(result.as_str(), "session=abc123; user=john; theme=dark");
+        assert_eq!(result.to_cookie(), "session=abc123; user=john; theme=dark");
     }
 
     #[test]
@@ -939,7 +998,7 @@ mod tests {
         let mut req = Request::new(Method::GET, "http://example.com");
         req.set_header(COOKIE, "session=abc123; user=john");
         let result = var_http_cookie(&req, Some("user"), &None);
-        assert_eq!(result.as_str(), "john");
+        assert_eq!(result.to_cookie(), "john");
     }
 
     #[test]
@@ -947,7 +1006,7 @@ mod tests {
         let mut req = Request::new(Method::GET, "http://example.com");
         req.set_header(COOKIE, "session=abc123");
         let result = var_http_cookie(&req, Some("nonexistent"), &None);
-        assert_eq!(result.as_str(), "");
+        assert_eq!(result.to_cookie(), "");
     }
 
     #[test]
@@ -955,6 +1014,6 @@ mod tests {
         let req = Request::new(Method::GET, "http://example.com");
         let default = Some(Box::new(Symbol::Text(Some("default_cookie"))));
         let result = var_http_cookie(&req, Some("nonexistent"), &default);
-        assert_eq!(result.as_str(), "default_cookie");
+        assert_eq!(result.to_cookie(), "default_cookie");
     }
 }
