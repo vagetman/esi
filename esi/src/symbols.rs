@@ -4,6 +4,7 @@ use fastly::device_detection;
 use fastly::http::header::{ACCEPT_LANGUAGE, COOKIE, HOST, REFERER};
 use fastly::http::HeaderName;
 use fastly::{handle::client_ip_addr, http::header::USER_AGENT, Request};
+use nom::AsChar;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_till, take_while1},
@@ -22,6 +23,24 @@ pub enum EValue<'v> {
     Dict(Vec<(Cow<'v, str>, Cow<'v, str>)>), // Dict with `Cow` for both keys and values
     List(Vec<Cow<'v, str>>),                 // List of strings (borrowed or owned)
     Str(Cow<'v, str>),                       // Single string (borrowed or owned)
+    Char(char),                              // Single character
+    Number(i32),                             // Number
+}
+
+impl<'v> EValue<'v> {
+    pub fn as_number(&self) -> i32 {
+        if let EValue::Number(n) = self {
+            *n
+        } else {
+            -1
+        }
+    }
+}
+
+impl<'v> From<char> for EValue<'v> {
+    fn from(c: char) -> Self {
+        EValue::Char(c) // Convert `char` to `Char`
+    }
 }
 
 impl<'v> From<String> for EValue<'v> {
@@ -73,6 +92,11 @@ impl<'v> From<Vec<(&'v str, &'v str)>> for EValue<'v> {
         )
     }
 }
+impl<'v> From<i32> for EValue<'v> {
+    fn from(i: i32) -> Self {
+        EValue::Number(i)
+    }
+}
 
 impl std::fmt::Display for EValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -86,6 +110,8 @@ impl std::fmt::Display for EValue<'_> {
                 let formatted = self.to_formatted_string(", ");
                 write!(f, "{{{formatted}}}")
             }
+            EValue::Char(c) => write!(f, "{}", c),
+            EValue::Number(n) => write!(f, "{}", n),
         }
     }
 }
@@ -104,6 +130,8 @@ impl<'v> EValue<'v> {
             }
             EValue::Str(s) => s.to_string(),
             EValue::List(_) => String::new(),
+            EValue::Char(c) => c.to_string(),
+            EValue::Number(n) => n.to_string(),
         }
     }
 
@@ -132,6 +160,8 @@ impl<'v> EValue<'v> {
             EValue::Dict(vec) => vec.is_empty(),
             EValue::List(vec) => vec.is_empty(),
             EValue::Str(s) => s.is_empty(),
+            EValue::Number(n) => *n == 0,
+            EValue::Char(c) => c.len() == 0,
         }
     }
 }

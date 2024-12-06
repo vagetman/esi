@@ -39,6 +39,69 @@ pub fn join<'a>(args: &[EValue<'a>]) -> EValue<'a> {
     val.into()
 }
 
+pub fn index<'a>(args: &[EValue<'a>]) -> EValue<'a> {
+    // $index(hay: string, needle: char)
+    println!("args: {:?}", args);
+    if args.is_empty() || args.len() != 2 {
+        return EValue::Number(-1);
+    }
+    let Some(arg0) = args.first() else {
+        return EValue::Number(-1);
+    };
+    let Some(arg1) = args.get(1) else {
+        return EValue::Number(-1);
+    };
+
+    let EValue::Str(hay) = arg0 else {
+        return EValue::Number(-1);
+    };
+
+    let EValue::Char(needle) = arg1 else {
+        return EValue::Number(-1);
+    };
+
+    println!("hay: {}, needle: {}", hay, needle);
+
+    let index = hay
+        .as_ref()
+        .chars()
+        .position(|c| c == *needle)
+        .map(|i| i as i32);
+    let index = index.unwrap_or(-1);
+    index.into()
+}
+
+fn rindex<'a>(args: &[EValue<'a>]) -> EValue<'a> {
+    // $rindex(hay: string, needle: char)
+    if args.is_empty() || args.len() != 2 {
+        return EValue::Number(-1);
+    }
+    let Some(arg0) = args.first() else {
+        return EValue::Number(-1);
+    };
+    let Some(arg1) = args.get(1) else {
+        return EValue::Number(-1);
+    };
+
+    let EValue::Str(hay) = arg0 else {
+        return EValue::Number(-1);
+    };
+
+    let EValue::Char(needle) = arg1 else {
+        return EValue::Number(-1);
+    };
+
+    println!("hay: {}, needle: {}", hay, needle);
+
+    let index = hay
+        .as_ref()
+        .chars()
+        .rposition(|c| c == *needle)
+        .map(|i| i as i32);
+    let index = index.unwrap_or(-1);
+    index.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +185,47 @@ mod tests {
         let args = vec![EValue::from(vec!["hello", "world"]), EValue::from("")];
         let result = join(&args);
         assert_eq!(result.as_str(), "helloworld");
+    }
+
+    #[test]
+    fn test_index_basic() {
+        let args = vec![EValue::from("hello"), EValue::from('e')];
+        let result = index(&args);
+        assert_eq!(result.as_number(), 1);
+    }
+
+    #[test]
+    fn test_index_not_found() {
+        let args = vec![EValue::from("hello"), EValue::from('x')];
+        let result = index(&args);
+        assert_eq!(result.as_number(), -1);
+    }
+
+    #[test]
+    fn test_index_empty_haystack() {
+        let args = vec![EValue::from(""), EValue::from('a')];
+        let result = index(&args);
+        assert_eq!(result.as_number(), -1);
+    }
+
+    #[test]
+    fn test_index_multiple_occurrences() {
+        let args = vec![EValue::from("banana"), EValue::from('a')];
+        let result = index(&args);
+        assert_eq!(result.as_number(), 1);
+    }
+
+    #[test]
+    fn test_index_empty_args() {
+        let args: Vec<EValue> = vec![];
+        let result = index(&args);
+        assert_eq!(result.as_number(), -1);
+    }
+
+    #[test]
+    fn test_index_invalid_args() {
+        let args = vec![EValue::from("hello")];
+        let result = index(&args);
+        assert_eq!(result.as_number(), -1);
     }
 }
